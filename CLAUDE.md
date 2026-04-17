@@ -1,0 +1,128 @@
+# CLAUDE.md — Age Rating Converter Jellyfin Plugin
+
+## Project identity
+
+- **Plugin name**: Age Rating Converter
+- **Assembly**: `Jellyfin.Plugin.AgeRating`
+- **Plugin GUID**: `3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07`
+- **Jellyfin target**: 10.11.x (NuGet `10.11.8`)
+- **Framework**: .NET 9 (`net9.0`) — Jellyfin 10.11.x runs on .NET 9. Earlier (10.9.x) was .NET 8; bumping the NuGet packages requires bumping the TFM in lockstep or the assembly will be rejected at load time.
+- **Solution file**: `Jellyfin.Plugin.AgeRating.sln`
+
+## Build
+
+```bash
+dotnet build Jellyfin.Plugin.AgeRating.sln \
+  /property:GenerateFullPaths=true \
+  /consoleloggerparameters:NoSummary
+```
+
+The output DLL goes to `Jellyfin.Plugin.AgeRating/bin/Debug/net9.0/Jellyfin.Plugin.AgeRating.dll`.
+
+A reproducible end-to-end dev environment (builds the DLL, generates mock media, and runs Jellyfin 10.11 with the plugin preinstalled) lives under `dev/` — run `./dev/run.sh` (or `./dev/run.sh --reset` for a clean wipe). Runtime state (Jellyfin config, mock media, built artifacts) lands in `.dev-env/`, gitignored.
+
+Two install modes, chosen via compose profiles in [dev/docker-compose.yml](dev/docker-compose.yml):
+
+- **`./dev/run.sh`** (default, `direct` profile) — a sidecar container drops the compiled DLL straight into `/config/plugins/<name>_<version>/` before Jellyfin starts. Fast loop for code changes.
+- **`./dev/run.sh --via-manifest`** (`manifest` profile) — builds a `.zip` + `manifest.json` under `.dev-env/dist/`, serves them on the compose network via a local nginx (hostname `manifest-server`), and leaves Jellyfin without the plugin preinstalled. Admin then pastes `http://manifest-server/manifest.json` into Dashboard → Plugins → Repositories and installs through the Jellyfin UI — exercising the same code path real users hit when the plugin is published.
+
+`TreatWarningsAsErrors=true` is set — the build will fail on any warning. Fix warnings, do not suppress them.
+
+## Code style
+
+StyleCop is active. Key rules in force:
+- PascalCase for types and public members; camelCase for locals; `_camelCase` for private fields.
+- All public members require XML doc comments (`<summary>` at minimum).
+- `using` directives go outside the namespace.
+- Nullable reference types enabled — use `?` and null-checks; do not use `!` to suppress warnings without justification.
+- No trailing whitespace; LF line endings; UTF-8.
+
+Follow the patterns already established in the existing files rather than introducing new conventions.
+
+## Key files and their roles
+
+| File | Role |
+|------|------|
+| `Jellyfin.Plugin.AgeRating/Plugin.cs` | Entry point. Sets `Plugin.Instance` singleton. Registers **two** `PluginPageInfo` entries: config (under Plugins → My Plugins → Settings) yielded first so Jellyfin's Settings link lands there, and main (`EnableInMainMenu = true`, appears in the admin sidebar as "Age Ratings"). |
+| `Jellyfin.Plugin.AgeRating/PluginServiceRegistrator.cs` | Registers `RatingConversionTask` in the DI container via `IPluginServiceRegistrator`. |
+| `Jellyfin.Plugin.AgeRating/Configuration/PluginConfiguration.cs` | Persisted settings: `EnableAutoConversion`, `OverwriteExistingRatings`, `UnratedValues`, `MappingTableJson`, `DefaultTargetSystem`. |
+| `Jellyfin.Plugin.AgeRating/Configuration/RatingMapping.cs` | Plain `{ Source, Target }` record used inside `MappingTableJson`. |
+| `Jellyfin.Plugin.AgeRating/Configuration/configPage.html` | Config surface (Dashboard → Plugins → Age Rating Converter). Target-system dropdown, unrated-values input, mapping-table editor with confirmation dialog. |
+| `Jellyfin.Plugin.AgeRating/Configuration/mainPage.html` | Primary surface (Dashboard → Age Ratings). Automation status, paginated searchable item list, filter chips, multi-select bulk-edit bar. |
+| `Jellyfin.Plugin.AgeRating/RatingMappings/AgeBucket.cs` | 8-value age-tier enum (All / Mild / Family / Teen / Mature / Adult / Restricted / NotRated) — the pivot between otherwise-incompatible rating systems. |
+| `Jellyfin.Plugin.AgeRating/RatingMappings/SystemRating.cs` | Record `(Rating, Bucket)`. |
+| `Jellyfin.Plugin.AgeRating/RatingMappings/SystemDescriptor.cs` | Record `(Id, DisplayName, ExampleRating)` — what `/SupportedSystems` returns. |
+| `Jellyfin.Plugin.AgeRating/RatingMappings/SystemRatings.cs` | Catalogue of 17 supported systems and their bucketed ratings. Single source of truth. |
+| `Jellyfin.Plugin.AgeRating/RatingMappings/DefaultMappings.cs` | `Generate(targetSystem)` — emits `source → target` rows pivoting through age buckets. |
+| `Jellyfin.Plugin.AgeRating/Tasks/RatingConversionTask.cs` | `ILibraryPostScanTask`. `BuildLookup()` is `internal static` so the API controller reuses it. |
+| `Jellyfin.Plugin.AgeRating/Api/RatingController.cs` | REST controller at `/AgeRating/`. `RequiresElevation` policy on every route. |
+| `Jellyfin.Plugin.AgeRating/Api/ItemListDto.cs`, `ItemRowDto.cs`, `BulkSetRatingRequestDto.cs`, `BulkSetRatingResponseDto.cs`, `RatingPreviewDto.cs` | API DTOs. |
+| `build.yaml` | Plugin metadata for the build/packaging pipeline. Must stay in sync with `Plugin.cs`'s GUID, the assembly version, and `targetAbi`. |
+| `manifest.json` | Jellyfin plugin-repository manifest served over HTTP (see Releasing). |
+
+## Configuration storage
+
+`PluginConfiguration` is serialised to XML by Jellyfin's `IXmlSerializer`. `MappingTableJson` stores the user's mapping table as a JSON string (list of `{Source, Target}` objects) because Jellyfin's XML serialiser does not handle complex nested collections well.
+
+When `MappingTableJson` is empty or invalid JSON, the conversion task is a **no-op** — it does *not* silently fall back to a hardcoded default set. Seeding defaults is an explicit gesture via "Load Built-in Defaults" on the config page.
+
+## Rating conversion logic
+
+The plugin writes **`CustomRating`**, not `OfficialRating`. Source of the lookup is still `OfficialRating` (what metadata providers give you); target is the user's `CustomRating`. Jellyfin already prefers `CustomRating` over `OfficialRating` for parental-control decisions, so the visible behavior matches user expectation — and provider refreshes don't clobber conversions.
+
+`RatingConversionTask.BuildLookup(config)` returns a case-insensitive `Dictionary<string, string>`. For each library Movie or Series (Episodes are intentionally excluded — a Series' CustomRating walks through `CustomRatingForComparison` to its children):
+
+1. Skip if `OfficialRating` is null/whitespace.
+2. Skip if no mapping exists for the current `OfficialRating`.
+3. Skip if `OverwriteExistingRatings` is off AND `CustomRating` is already non-empty (respect hand-curated overrides).
+4. Skip if `CustomRating` already equals the mapping target (idempotency).
+5. Otherwise set `item.CustomRating = target` and call `item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)`.
+
+If the library has Jellyfin's Nfo metadata saver enabled, the change also persists to `<customrating>` in the NFO on disk. Without the saver, changes stay in Jellyfin's DB (still survives routine metadata refreshes; only a full `ReplaceAllMetadata` clears `CustomRating`).
+
+## API endpoints
+
+All endpoints require the `RequiresElevation` authorisation policy.
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&page=&pageSize=` | Paginated `ItemListDto` with `Items`, `TotalCount`, `Page`, `PageSize`, `UnratedCount`, `PendingCount`. Server-side filter + search. |
+| `GET /AgeRating/SupportedSystems` | `IReadOnlyList<SystemDescriptor>` — 17 systems with `Id`, `DisplayName`, `ExampleRating`. |
+| `GET /AgeRating/DefaultMappings?target={id}` | `IReadOnlyList<RatingMapping>` generated for the given target. 400 on unknown/missing target. |
+| `GET /AgeRating/Preview` | `IEnumerable<RatingPreviewDto>` — items whose next conversion run would actually change `CustomRating`. |
+| `POST /AgeRating/ApplyNow` | Runs `RatingConversionTask.Run()` inline; 200 when done. |
+| `POST /AgeRating/BulkSetRating` | Body `{ ItemIds, Rating }`; writes `Rating` to every listed item's `CustomRating` (empty string clears). Returns `{ UpdatedCount }`. |
+
+## Dashboard UI notes
+
+The plugin ships **two** embedded HTML pages (`configPage.html` for config, `mainPage.html` for day-to-day use). Both must stay under `<EmbeddedResource>` in the csproj.
+
+Two Jellyfin-specific constraints to keep in mind:
+- **`<head>` is dropped** when Jellyfin injects a plugin config page as a fragment. Put `<style>` blocks and titles *inside* the page's `data-role="page"` div, not in `<head>`.
+- **API responses are PascalCase** (e.g. `ItemId`, not `itemId`). `ApiClient.ajax({ ..., dataType: 'json' })` is required to get parsed JSON; without `dataType` you get a `Response` object.
+
+Both pages use the Emby UI component system (`is="emby-button"`, `is="emby-input"`, `is="emby-checkbox"`, `is="emby-select"`) and communicate with the server via `ApiClient.getPluginConfiguration()`, `ApiClient.updatePluginConfiguration()`, and `ApiClient.ajax()`. Navigation and all interaction is plain JavaScript — no framework, no build step.
+
+## Releasing
+
+The plugin is distributed via a manifest URL that admins paste into Dashboard → Plugins → Repositories. The manifest lives at [manifest.json](manifest.json) at the repo root (served via `https://raw.githubusercontent.com/<owner>/jellyage/main/manifest.json` once the repo is on GitHub).
+
+Releasing is tag-driven via [.github/workflows/release.yml](.github/workflows/release.yml):
+
+1. Bump the Assembly/FileVersion in the csproj if you changed it (tag will flow through as `/p:Version=...`).
+2. Update `version:` in [build.yaml](build.yaml).
+3. `git tag v1.0.0.0 && git push --tags` (four-segment version to match Jellyfin's `AssemblyVersion` convention).
+
+The Action then:
+- Builds the DLL in Release mode with the tag's version.
+- Zips the DLL flat (no subdirectory — Jellyfin extracts into its own `<name>_<version>/` dir).
+- Computes MD5 (lowercase hex — what Jellyfin's `InstallationManager` verifies).
+- Creates the GitHub Release and uploads the zip as an asset.
+- Prepends a new version entry into `.[0].versions` in `manifest.json` and pushes that back to `main`.
+
+## Things to avoid
+
+- Do not add the `Jellyfin.Controller` or `Jellyfin.Model` packages as runtime dependencies — they must keep `<ExcludeAssets>runtime</ExcludeAssets>` or the plugin will conflict with the server's own binaries.
+- Do not change the plugin GUID after the plugin has been installed on a Jellyfin server — the GUID is how Jellyfin identifies stored configuration.
+- Do not use `async void`; all async paths must return `Task` or `Task<T>`.
+- Do not swallow exceptions silently; log them via the injected `ILogger`.

@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07",
+    "name": "Age Rating Converter",
+    "description": "Converts media age ratings between rating systems (MPAA, BBFC, FSK, CNC, PEGI, Kijkwijzer, Nordic systems, EIRIN, KMRB, ACB, HKCAT, OFLC, Russia) using a target-system-driven mapping table. Writes to Jellyfin's CustomRating so conversions survive metadata refreshes.",
+    "overview": "Target-system-driven age rating conversion for Jellyfin.",
+    "owner": "therealscienta",
+    "category": "Metadata",
+    "imageUrl": "",
+    "versions": []
+  }
+]

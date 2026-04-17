@@ -1,0 +1,18 @@
+---
+name: "Age Rating Converter"
+guid: "3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07"
+version: "1.0.0.0"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+overview: "Converts media age ratings between rating systems (MPAA, BBFC, FSK, and more) using a user-defined mapping table."
+description: >
+  Automatically converts OfficialRating values on library items between different age rating
+  systems such as MPAA, BBFC, FSK, and custom systems. Runs after every library scan.
+  Includes a dashboard page for managing the mapping table, listing unrated items,
+  and browsing all items grouped by their current rating.
+category: "Metadata"
+owner: "jellyfin"
+artifacts:
+- "Jellyfin.Plugin.AgeRating.dll"
+changelog: >
+  Initial release.

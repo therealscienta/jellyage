@@ -1,0 +1,62 @@
+name: jellyage-dev
+
+# Two install modes, selected by compose profile:
+#
+#   direct    — default. plugin-installer drops the compiled DLL
+#               straight into /config/plugins/<name>_<version>/. Fast
+#               iteration for code changes.
+#
+#   manifest  — exercises the end-user install path. manifest-server
+#               serves the built .zip + manifest.json over HTTP on the
+#               compose network; Jellyfin installs the plugin through
+#               its own Dashboard → Plugins → Repositories flow.
+#
+# Activate with e.g.  docker compose --profile direct up -d
+#                 or  docker compose --profile manifest up -d
+# — dev/run.sh wraps this for you.
+
+services:
+  plugin-installer:
+    profiles: ["direct"]
+    build:
+      context: ..
+      dockerfile: dev/Dockerfile
+    image: jellyage-plugin-installer:dev
+    volumes:
+      - ../.dev-env/config:/config
+
+  manifest-server:
+    profiles: ["manifest"]
+    build:
+      context: serve-manifest
+      dockerfile: Dockerfile
+    image: jellyage-manifest-server:dev
+    volumes:
+      - ../.dev-env/dist:/srv:ro
+
+  jellyfin:
+    image: jellyfin/jellyfin:10.11
+    container_name: jellyage-dev
+    ports:
+      - "8096:8096"
+    volumes:
+      - ../.dev-env/config:/config
+      - ../.dev-env/cache:/cache
+      - ../.dev-env/media:/media:ro
+    environment:
+      TZ: Europe/Stockholm
+      JELLYFIN_PublishedServerUrl: http://localhost:8096
+    restart: unless-stopped
+    depends_on:
+      plugin-installer:
+        condition: service_completed_successfully
+        required: false
+      manifest-server:
+        condition: service_started
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8096/System/Info/Public || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 30s

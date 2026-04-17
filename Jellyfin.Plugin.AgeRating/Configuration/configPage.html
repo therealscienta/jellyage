@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Age Rating Converter</title>
+</head>
+<body>
+    <div id="AgeRatingConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
+        <style>
+            /* Inlined inside the page div because Jellyfin drops <head>
+               contents when it injects the config page as a fragment. */
+            .arc-container { padding: 1em 1.5em 2em; max-width: 1000px; }
+            .arc-card { background: #202020; border: 1px solid #2f2f2f; border-radius: 6px; padding: 1em 1.2em; margin-bottom: 1.2em; }
+            .arc-card-title { margin: 0 0 0.8em; font-size: 1em; letter-spacing: 0.04em; text-transform: uppercase; color: #aaa; }
+
+            .arc-table { width: 100%; border-collapse: collapse; margin-top: 0.5em; }
+            .arc-table th, .arc-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2f2f2f; }
+            .arc-table th { font-weight: 600; color: #aaa; font-size: 0.85em; letter-spacing: 0.03em; text-transform: uppercase; }
+            .arc-table input { width: 100%; box-sizing: border-box; }
+            .arc-table .del-btn { cursor: pointer; color: #e87070; background: none; border: none; font-size: 1.1em; }
+
+            /* Rating mapping: the values (G, PG-13, FSK 12...) are short, so don't stretch
+               the input fields across the whole container — it just looks cluttered. */
+            #MappingsTable { width: auto; }
+            #MappingsTable th, #MappingsTable td { padding-right: 1.5em; }
+            #MappingsTable td input { width: 9em; }
+            .arc-actions { margin: 0.7em 0; display: flex; gap: 8px; flex-wrap: wrap; }
+            .arc-msg { margin: 0.5em 0; color: #8ec46e; min-height: 1.2em; }
+            .arc-err { color: #e87070 !important; }
+
+            .arc-hint { color: #888; margin: 0 0 1em; }
+            .arc-hint a { color: #00a4dc; }
+
+            /* Empty-state notice inside the mapping card when no rows exist. */
+            .arc-empty-notice { border: 1px dashed #444; padding: 1em 1.2em; text-align: center; color: #888; margin: 0.6em 0; border-radius: 4px; }
+            .arc-empty-notice strong { color: #ccc; display: block; margin-bottom: 0.2em; }
+
+            /* Confirmation dialog (native <dialog>). */
+            dialog.arc-dialog { background: #202020; border: 1px solid #2f2f2f; border-radius: 6px; color: inherit; padding: 1.2em 1.4em; max-width: 36em; }
+            dialog.arc-dialog::backdrop { background: rgba(0,0,0,0.6); }
+            dialog.arc-dialog h3 { margin: 0 0 0.6em; }
+            dialog.arc-dialog .arc-dialog-body { color: #ccc; margin: 0 0 1em; }
+            dialog.arc-dialog .arc-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+        </style>
+
+        <div data-role="content">
+            <div class="arc-container">
+                <h2>Age Rating Converter</h2>
+                <p class="arc-hint">
+                    Day-to-day rating fixes live under
+                    <a href="#/configurationpage?name=AgeRatings">Dashboard → Age Ratings</a>.
+                    This page configures the automation rules.
+                </p>
+                <p class="arc-hint">
+                    Converted values are written to each item's <em>Custom rating</em>,
+                    not its main parental rating. This keeps the provider's original rating
+                    intact across refreshes. Changes always persist in Jellyfin's database;
+                    to also save <code>&lt;customrating&gt;</code> to the NFO file on disk,
+                    enable the <em>Nfo</em> saver under
+                    Dashboard&nbsp;→&nbsp;Libraries&nbsp;→&nbsp;<em>library</em>&nbsp;→&nbsp;Metadata&nbsp;savers.
+                </p>
+
+                <!-- ── Settings ──────────────────────────────────────────────── -->
+                <div class="arc-card">
+                    <h3 class="arc-card-title">Settings</h3>
+                    <form id="AgeRatingSettingsForm">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="UnratedValues">Values treated as "unrated" (comma-separated)</label>
+                            <input id="UnratedValues" type="text" is="emby-input" />
+                            <div class="fieldDescription">E.g. NR, Not Rated, Unrated, Unknown, UR</div>
+                        </div>
+                        <div class="selectContainer" style="margin-top:1em;">
+                            <label class="selectLabel" for="DefaultTargetSystem">Default target rating system</label>
+                            <select id="DefaultTargetSystem" is="emby-select">
+                                <option value="">-- Select a system --</option>
+                            </select>
+                            <div class="fieldDescription">
+                                Used when loading built-in defaults into the mapping table.
+                            </div>
+                        </div>
+                        <div class="arc-actions" style="margin-top:1em;">
+                            <button is="emby-button" type="submit" class="raised button-submit emby-button">
+                                <span>Save Settings</span>
+                            </button>
+                        </div>
+                        <div id="arc-settings-msg" class="arc-msg"></div>
+                    </form>
+                </div>
+
+                <!-- ── Mapping Table ─────────────────────────────────────────── -->
+                <div class="arc-card">
+                    <h3 class="arc-card-title">Rating Mapping</h3>
+                    <div class="arc-actions">
+                        <button is="emby-button" type="button" id="LoadDefaultsBtn" class="raised emby-button">
+                            <span id="arc-load-defaults-label">Load Built-in Defaults</span>
+                        </button>
+                        <button is="emby-button" type="button" id="AddRowBtn" class="raised emby-button">+ Add Row</button>
+                        <button is="emby-button" type="button" id="SaveMappingsBtn" class="raised button-submit emby-button">Save Mappings</button>
+                    </div>
+                    <div id="arc-mappings-msg" class="arc-msg"></div>
+                    <div id="arc-empty-notice" class="arc-empty-notice" style="display:none;">
+                        <strong>No mappings yet</strong>
+                        <span id="arc-empty-copy"></span>
+                    </div>
+                    <table class="arc-table" id="MappingsTable">
+                        <thead><tr><th>Source Rating</th><th>Target Rating</th><th></th></tr></thead>
+                        <tbody id="MappingsBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Load-defaults confirmation dialog -->
+                <dialog id="arc-confirm-dialog" class="arc-dialog">
+                    <h3>Replace mapping table?</h3>
+                    <p class="arc-dialog-body" id="arc-confirm-body"></p>
+                    <div class="arc-dialog-actions">
+                        <button is="emby-button" type="button" id="arc-confirm-cancel" class="emby-button">
+                            <span>Cancel</span>
+                        </button>
+                        <button is="emby-button" type="button" id="arc-confirm-replace" class="raised button-submit emby-button">
+                            <span>Replace with defaults</span>
+                        </button>
+                    </div>
+                </dialog>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+        (function () {
+            var PLUGIN_ID = '3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07';
+
+            function esc(s) {
+                if (!s) return '';
+                return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            }
+            function q(sel) { return document.querySelector(sel); }
+
+            // ── Page load ────────────────────────────────────────────────────────
+            q('#AgeRatingConfigPage').addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+
+                // Populate the target-system dropdown from the server so the option
+                // list stays in sync with SystemRatings without JS/C# duplication.
+                var systemsLoaded = ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/SupportedSystems'),
+                    dataType: 'json'
+                }).then(function (systems) {
+                    var select = q('#DefaultTargetSystem');
+                    // Keep the placeholder option and append the rest.
+                    (systems || []).forEach(function (s) {
+                        var opt = document.createElement('option');
+                        opt.value = s.Id;
+                        opt.textContent = s.DisplayName;
+                        select.appendChild(opt);
+                    });
+                });
+
+                var configLoaded = ApiClient.getPluginConfiguration(PLUGIN_ID).then(function (config) {
+                    q('#UnratedValues').value = config.UnratedValues || '';
+                    // Select value is set after the options are in place; Promise.all below guarantees order.
+                    return config;
+                });
+
+                Promise.all([systemsLoaded, configLoaded]).then(function (results) {
+                    var config = results[1];
+                    q('#DefaultTargetSystem').value = config.DefaultTargetSystem || '';
+                    renderMappingsTable(config.MappingTableJson);
+                    updateLoadDefaultsLabel();
+                    Dashboard.hideLoadingMsg();
+                });
+            });
+
+            q('#DefaultTargetSystem').addEventListener('change', function () {
+                // Reflect the new choice on the button immediately; it doesn't persist
+                // until the user clicks Save Settings.
+                updateLoadDefaultsLabel();
+            });
+
+            // ── Settings form ────────────────────────────────────────────────────
+            q('#AgeRatingSettingsForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(PLUGIN_ID).then(function (config) {
+                    config.UnratedValues = q('#UnratedValues').value;
+                    config.DefaultTargetSystem = q('#DefaultTargetSystem').value || '';
+                    ApiClient.updatePluginConfiguration(PLUGIN_ID, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                        updateEmptyNotice();
+                    });
+                });
+            });
+
+            // ── Mapping table ────────────────────────────────────────────────────
+            function renderMappingsTable(json) {
+                var rows = [];
+                if (json) {
+                    try { rows = JSON.parse(json); } catch (e) { rows = []; }
+                }
+                var tbody = q('#MappingsBody');
+                tbody.innerHTML = '';
+                (rows || []).forEach(function (m) {
+                    addMappingRow(m.source || m.Source || '', m.target || m.Target || '');
+                });
+                updateEmptyNotice();
+            }
+
+            function addMappingRow(src, tgt) {
+                var tbody = q('#MappingsBody');
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td><input type="text" class="arc-src" value="' + esc(src) + '" /></td>' +
+                    '<td><input type="text" class="arc-tgt" value="' + esc(tgt) + '" /></td>' +
+                    '<td><button class="del-btn" title="Remove">✕</button></td>';
+                tr.querySelector('.del-btn').addEventListener('click', function () {
+                    tr.remove();
+                    updateEmptyNotice();
+                });
+                tbody.appendChild(tr);
+                updateEmptyNotice();
+            }
+
+            function rowCount() {
+                return document.querySelectorAll('#MappingsBody tr').length;
+            }
+
+            function updateEmptyNotice() {
+                var notice = q('#arc-empty-notice');
+                var empty = rowCount() === 0;
+                notice.style.display = empty ? '' : 'none';
+                if (empty) {
+                    var target = (q('#DefaultTargetSystem') && q('#DefaultTargetSystem').value) || '';
+                    q('#arc-empty-copy').textContent = target
+                        ? 'Click Load Built-in Defaults to load defaults for ' + target + ', or add rows manually with + Add Row.'
+                        : 'Pick a default target system in Settings above, then click Load Built-in Defaults — or add rows manually with + Add Row.';
+                }
+            }
+
+            function updateLoadDefaultsLabel() {
+                var target = q('#DefaultTargetSystem').value;
+                var btn = q('#LoadDefaultsBtn');
+                var label = q('#arc-load-defaults-label');
+                if (target) {
+                    label.textContent = 'Load Built-in Defaults (' + target + ')';
+                    btn.disabled = false;
+                } else {
+                    label.textContent = 'Load Built-in Defaults';
+                    btn.disabled = true;
+                }
+            }
+
+            q('#AddRowBtn').addEventListener('click', function () { addMappingRow('', ''); });
+
+            // ── Load Defaults (with confirmation) ───────────────────────────────
+            q('#LoadDefaultsBtn').addEventListener('click', function () {
+                var target = q('#DefaultTargetSystem').value;
+                if (!target) {
+                    // Shouldn't happen — the button is disabled in that state — but
+                    // belt-and-suspenders.
+                    return;
+                }
+                var n = rowCount();
+                var body = q('#arc-confirm-body');
+                body.textContent = n === 0
+                    ? 'This will load built-in defaults for ' + target + '.'
+                    : 'This will overwrite all ' + n + ' current row(s) with built-in defaults for ' + target + '. Any custom mappings will be lost.';
+                q('#arc-confirm-dialog').showModal();
+            });
+
+            q('#arc-confirm-cancel').addEventListener('click', function () {
+                q('#arc-confirm-dialog').close();
+            });
+
+            q('#arc-confirm-replace').addEventListener('click', function () {
+                var target = q('#DefaultTargetSystem').value;
+                q('#arc-confirm-dialog').close();
+                if (!target) return;
+
+                var msg = q('#arc-mappings-msg');
+                msg.className = 'arc-msg';
+                msg.textContent = 'Loading defaults…';
+
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/DefaultMappings?target=' + encodeURIComponent(target)),
+                    dataType: 'json'
+                }).then(function (defaults) {
+                    q('#MappingsBody').innerHTML = '';
+                    (defaults || []).forEach(function (m) {
+                        addMappingRow(m.Source || '', m.Target || '');
+                    });
+                    msg.textContent = 'Loaded ' + (defaults || []).length + ' default(s) for ' + target + '. Click Save Mappings to persist.';
+                }).catch(function () {
+                    msg.className = 'arc-msg arc-err';
+                    msg.textContent = 'Failed to load defaults. Check server logs.';
+                });
+            });
+
+            // ── Save Mappings ──────────────────────────────────────────────────
+            q('#SaveMappingsBtn').addEventListener('click', function () {
+                var rows = Array.from(document.querySelectorAll('#MappingsBody tr')).map(function (tr) {
+                    return {
+                        Source: tr.querySelector('.arc-src').value.trim(),
+                        Target: tr.querySelector('.arc-tgt').value.trim()
+                    };
+                }).filter(function (m) { return m.Source && m.Target; });
+
+                var msg = q('#arc-mappings-msg');
+                msg.className = 'arc-msg';
+                msg.textContent = 'Saving…';
+
+                ApiClient.getPluginConfiguration(PLUGIN_ID).then(function (config) {
+                    config.MappingTableJson = JSON.stringify(rows);
+                    ApiClient.updatePluginConfiguration(PLUGIN_ID, config).then(function () {
+                        msg.textContent = 'Saved ' + rows.length + ' mapping(s).';
+                        setTimeout(function () { if (msg.textContent.startsWith('Saved ')) msg.textContent = ''; }, 2500);
+                    });
+                });
+            });
+        })();
+        </script>
+    </div>
+</body>
+</html>

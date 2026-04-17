@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+artifacts/
+
+# IDE / editor
+.vs/
+.idea/
+*.user
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor backups
+*.swp
+*.swo
+*~
+
+# Local dev harness state (plugin DLL drops, mock media, dist/ zips, Jellyfin config)
+.dev-env/

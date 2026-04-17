@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Age Ratings</title>
+</head>
+<body>
+    <div id="AgeRatingsMainPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
+        <style>
+            /* Inlined inside the page div because Jellyfin drops <head>
+               when it injects the page as a fragment. */
+            .arc-container { padding: 2.5em 1.5em 6em; max-width: 1400px; }
+            .arc-page-header { display: flex; align-items: baseline; gap: 1.5em; margin: 0 0 1em; flex-wrap: wrap; }
+            .arc-page-title { margin: 0; }
+            .arc-page-nav { color: #00a4dc; text-decoration: none; font-size: 0.95em; }
+            .arc-page-nav:hover { text-decoration: underline; }
+
+            /* Plain checkboxes for the items table. We don't use
+               is="emby-checkbox" here because the custom-element upgrade
+               doesn't fire reliably on rows inserted via innerHTML,
+               which leaves some rows with a large styled box and others
+               with a tiny native one. Using our own box keeps them uniform. */
+            .arc-cb { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; border: 2px solid #666; border-radius: 3px; background: transparent; cursor: pointer; display: inline-block; vertical-align: middle; margin: 0; position: relative; }
+            .arc-cb:hover { border-color: #999; }
+            .arc-cb:checked { background: #00a4dc; border-color: #00a4dc; }
+            .arc-cb:checked::after { content: ''; position: absolute; left: 4px; top: 0px; width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+            .arc-cb:focus-visible { outline: 2px solid #00a4dc; outline-offset: 2px; }
+
+            .arc-card { background: #202020; border: 1px solid #2f2f2f; border-radius: 6px; padding: 1em 1.2em; margin-bottom: 1.2em; }
+            .arc-card-title { margin: 0 0 0.5em; font-size: 1em; letter-spacing: 0.04em; text-transform: uppercase; color: #aaa; }
+            .arc-card-row { display: flex; gap: 1em; align-items: center; flex-wrap: wrap; }
+            .arc-card-row .checkboxContainer { margin: 0 !important; }
+            .arc-status-line { color: #ccc; margin: 0.4em 0 0.8em; }
+            .arc-status-count { color: #fff; font-weight: 600; }
+            .arc-status-count.warn { color: #e8a56e; }
+            .arc-status-count.ok { color: #8ec46e; }
+            .arc-status-count.zero { color: #888; }
+
+            .arc-filters { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; margin-bottom: 0.8em; }
+            .arc-search { flex: 1 1 220px; min-width: 200px; max-width: 360px; }
+            .arc-chip { padding: 6px 14px; cursor: pointer; border: 1px solid #555; background: transparent; color: inherit; border-radius: 999px; font-size: 0.9em; }
+            .arc-chip.active { background: #00a4dc; border-color: #00a4dc; color: #fff; }
+            .arc-type-select { padding: 6px 10px; }
+
+            .arc-table { width: 100%; border-collapse: collapse; margin-top: 0.5em; }
+            .arc-table th, .arc-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #2f2f2f; }
+            .arc-table th { font-weight: 600; color: #aaa; font-size: 0.85em; letter-spacing: 0.03em; text-transform: uppercase; }
+            .arc-table tbody tr:hover { background: #262626; }
+            .arc-table .arc-check-col { width: 2.5em; }
+            .arc-table .arc-type-col { width: 5em; color: #aaa; }
+            .arc-table .arc-rating-col { width: 8em; }
+            .arc-table .arc-arrow { color: #666; padding: 0 0.3em; }
+            .arc-table .arc-proposed { color: #8ec46e; }
+            .arc-table .arc-custom { color: #00a4dc; }
+            .arc-table .arc-none { color: #666; font-style: italic; }
+
+            .arc-card-hint { color: #888; margin: 0.6em 0 0; font-size: 0.9em; }
+
+            .arc-pager { display: flex; gap: 0.6em; align-items: center; justify-content: flex-end; margin-top: 0.8em; color: #aaa; }
+            .arc-pager .arc-pager-info { margin: 0 0.6em; }
+
+            .arc-msg { margin: 0.3em 0; color: #8ec46e; min-height: 1.2em; }
+            .arc-err { color: #e87070 !important; }
+
+            /* Skeleton loading rows */
+            .arc-skel { background: linear-gradient(90deg, #262626, #303030, #262626); background-size: 200% 100%; animation: arc-pulse 1.4s infinite; border-radius: 3px; height: 0.9em; }
+            @keyframes arc-pulse { 0% { background-position: 0% 0; } 100% { background-position: -200% 0; } }
+
+            /* Empty state */
+            .arc-empty { padding: 3em 1em; text-align: center; color: #888; }
+
+            /* Sticky bulk action bar — left offset clears Jellyfin's admin
+               drawer (240px on desktop, collapses below 960px). */
+            .arc-bulk-bar { position: fixed; left: 0; right: 0; bottom: 0; background: #1a1a1a; border-top: 1px solid #00a4dc; padding: 0.8em 1.5em; display: flex; gap: 1em; align-items: center; flex-wrap: wrap; z-index: 100; box-shadow: 0 -4px 16px rgba(0,0,0,0.4); transform: translateY(100%); transition: transform 180ms ease-out; }
+            .arc-bulk-bar.visible { transform: translateY(0); }
+            @media (min-width: 960px) {
+                .arc-bulk-bar { left: 240px; }
+            }
+            .arc-bulk-bar .arc-bulk-count { font-weight: 600; flex-shrink: 0; }
+            .arc-bulk-bar .arc-bulk-rating-input { flex: 0 1 180px; }
+            .arc-bulk-bar .arc-bulk-spacer { flex: 1 0 auto; }
+        </style>
+
+        <div data-role="content">
+            <div class="arc-container">
+                <div class="arc-page-header">
+                    <h2 class="arc-page-title">Age Ratings</h2>
+                    <a class="arc-page-nav" href="#/configurationpage?name=Age%20Rating%20Converter">Edit mappings &amp; settings →</a>
+                </div>
+
+                <!-- ── Automation status card ───────────────────────────────────── -->
+                <div class="arc-card">
+                    <h3 class="arc-card-title">Automation</h3>
+
+                    <div class="arc-status-line">
+                        <span id="arc-pending-display">Loading…</span>
+                    </div>
+
+                    <div class="arc-card-row">
+                        <label class="checkboxContainer">
+                            <input id="arc-auto-toggle" type="checkbox" is="emby-checkbox" />
+                            <span>Run after library scan</span>
+                        </label>
+                        <label class="checkboxContainer">
+                            <input id="arc-overwrite-toggle" type="checkbox" is="emby-checkbox" />
+                            <span>Overwrite existing ratings</span>
+                        </label>
+                        <div style="flex:1"></div>
+                        <button is="emby-button" type="button" id="arc-run-now" class="raised button-submit emby-button">
+                            <span>Run Now</span>
+                        </button>
+                    </div>
+                    <div id="arc-automation-msg" class="arc-msg"></div>
+                    <p class="arc-card-hint">
+                        Writes to each item's <em>Custom rating</em>, leaving the parental rating from
+                        metadata providers intact. Changes always persist in Jellyfin's database.
+                        To also save <code>&lt;customrating&gt;</code> to the NFO file on disk
+                        (recommended if you want changes to survive a full rescan), enable the
+                        <em>Nfo</em> saver under
+                        Dashboard&nbsp;→&nbsp;Libraries&nbsp;→&nbsp;<em>library</em>&nbsp;→&nbsp;Metadata&nbsp;savers.
+                    </p>
+                </div>
+
+                <!-- ── Items working surface ────────────────────────────────────── -->
+                <div class="arc-card">
+                    <h3 class="arc-card-title">Items</h3>
+
+                    <div class="arc-filters">
+                        <input id="arc-search" type="text" is="emby-input" class="arc-search" placeholder="Search title…" />
+                        <button class="arc-chip active" data-filter="all">All</button>
+                        <button class="arc-chip" data-filter="unrated">Unrated <span id="arc-unrated-badge"></span></button>
+                        <button class="arc-chip" data-filter="pending">Has pending change <span id="arc-pending-badge"></span></button>
+                        <select id="arc-type-select" is="emby-select" class="arc-type-select">
+                            <option value="all">All types</option>
+                            <option value="Movie">Movies</option>
+                            <option value="Series">Series</option>
+                        </select>
+                    </div>
+
+                    <div id="arc-table-wrap">
+                        <table class="arc-table">
+                            <thead>
+                                <tr>
+                                    <th class="arc-check-col"><input id="arc-select-all" type="checkbox" class="arc-cb" /></th>
+                                    <th>Name</th>
+                                    <th class="arc-type-col">Type</th>
+                                    <th class="arc-rating-col">Parental</th>
+                                    <th class="arc-rating-col">Custom</th>
+                                    <th class="arc-rating-col">Proposed</th>
+                                </tr>
+                            </thead>
+                            <tbody id="arc-items-body">
+                                <!-- populated by JS -->
+                            </tbody>
+                        </table>
+                        <div id="arc-empty" class="arc-empty" style="display:none;"></div>
+                    </div>
+
+                    <div class="arc-pager">
+                        <button is="emby-button" type="button" id="arc-prev" class="emby-button">Prev</button>
+                        <span class="arc-pager-info" id="arc-pager-info">–</span>
+                        <button is="emby-button" type="button" id="arc-next" class="emby-button">Next</button>
+                    </div>
+                </div>
+
+                <!-- ── Sticky bulk action bar (hidden until selection) ─────────── -->
+                <div id="arc-bulk-bar" class="arc-bulk-bar">
+                    <span class="arc-bulk-count"><span id="arc-bulk-n">0</span> selected</span>
+                    <input id="arc-bulk-rating" type="text" is="emby-input" class="arc-bulk-rating-input" placeholder="Custom rating (e.g. PG-13, empty = clear)" />
+                    <button is="emby-button" type="button" id="arc-bulk-apply" class="raised button-submit emby-button">
+                        <span>Apply to selected</span>
+                    </button>
+                    <button is="emby-button" type="button" id="arc-bulk-clear" class="emby-button">
+                        <span>Clear selection</span>
+                    </button>
+                    <div class="arc-bulk-spacer"></div>
+                    <span id="arc-bulk-msg" class="arc-msg"></span>
+                </div>
+
+            </div>
+        </div>
+
+        <script type="text/javascript">
+        (function () {
+            var PLUGIN_ID = '3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07';
+            var PAGE_SIZE = 50;
+
+            // ── State ────────────────────────────────────────────────────────────
+            var state = {
+                filter: 'all',     // all | unrated | pending
+                type: 'all',       // all | Movie | Series
+                search: '',
+                page: 1,
+                totalCount: 0,
+                selected: new Set(), // item IDs selected on the CURRENT page
+                searchDebounce: null,
+                isLoading: false,
+                targetSystem: '',      // config DefaultTargetSystem, e.g. "BBFC"
+                targetExample: '',     // representative rating, e.g. "12A"
+            };
+
+            // ── Helpers ──────────────────────────────────────────────────────────
+            function esc(s) {
+                if (s === null || s === undefined) return '';
+                return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            }
+            function q(sel) { return document.querySelector(sel); }
+            function qa(sel) { return Array.from(document.querySelectorAll(sel)); }
+
+            // ── Initial load ─────────────────────────────────────────────────────
+            q('#AgeRatingsMainPage').addEventListener('pageshow', function () {
+                loadConfig();
+                refreshItems();
+            });
+
+            // ── Config load + auto-save toggles ──────────────────────────────────
+            function loadConfig() {
+                // Load config and the supported-systems list in parallel; the
+                // latter gives us a representative rating to use as the bulk-edit
+                // placeholder when a target system is configured.
+                var configPromise = ApiClient.getPluginConfiguration(PLUGIN_ID);
+                var systemsPromise = ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/SupportedSystems'),
+                    dataType: 'json'
+                }).catch(function () { return []; });
+                Promise.all([configPromise, systemsPromise]).then(function (results) {
+                    var config = results[0];
+                    var systems = results[1] || [];
+                    q('#arc-auto-toggle').checked = !!config.EnableAutoConversion;
+                    q('#arc-overwrite-toggle').checked = !!config.OverwriteExistingRatings;
+                    state.targetSystem = config.DefaultTargetSystem || '';
+                    var match = systems.find(function (s) { return s.Id === state.targetSystem; });
+                    state.targetExample = match ? match.ExampleRating : '';
+                    applyTargetLabels();
+                });
+            }
+
+            // Update UI elements that reflect the chosen target system.
+            function applyTargetLabels() {
+                var example = state.targetExample || 'PG-13';
+                q('#arc-bulk-rating').placeholder = 'Custom rating (e.g. ' + example + ', empty = clear)';
+            }
+
+            function saveConfigToggle(key, value) {
+                var msg = q('#arc-automation-msg');
+                msg.className = 'arc-msg';
+                msg.textContent = 'Saving…';
+                ApiClient.getPluginConfiguration(PLUGIN_ID).then(function (config) {
+                    config[key] = value;
+                    ApiClient.updatePluginConfiguration(PLUGIN_ID, config).then(function () {
+                        msg.textContent = 'Saved.';
+                        setTimeout(function () { if (msg.textContent === 'Saved.') msg.textContent = ''; }, 1500);
+                        // Pending count may have changed (Overwrite toggle affects counts)
+                        refreshItems();
+                    }).catch(function () {
+                        msg.className = 'arc-msg arc-err';
+                        msg.textContent = 'Failed to save.';
+                    });
+                });
+            }
+
+            q('#arc-auto-toggle').addEventListener('change', function (e) {
+                saveConfigToggle('EnableAutoConversion', e.target.checked);
+            });
+            q('#arc-overwrite-toggle').addEventListener('change', function (e) {
+                saveConfigToggle('OverwriteExistingRatings', e.target.checked);
+            });
+
+            // ── Run Now ─────────────────────────────────────────────────────────
+            q('#arc-run-now').addEventListener('click', function () {
+                var msg = q('#arc-automation-msg');
+                msg.className = 'arc-msg';
+                msg.textContent = 'Running conversion…';
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('AgeRating/ApplyNow') }).then(function () {
+                    msg.textContent = 'Conversion complete.';
+                    setTimeout(function () { if (msg.textContent === 'Conversion complete.') msg.textContent = ''; }, 2000);
+                    refreshItems();
+                }).catch(function () {
+                    msg.className = 'arc-msg arc-err';
+                    msg.textContent = 'Conversion failed. Check server logs.';
+                });
+            });
+
+            // ── Filter chips ────────────────────────────────────────────────────
+            qa('.arc-chip').forEach(function (chip) {
+                chip.addEventListener('click', function () {
+                    qa('.arc-chip').forEach(function (c) { c.classList.remove('active'); });
+                    chip.classList.add('active');
+                    state.filter = chip.dataset.filter;
+                    state.page = 1;
+                    state.selected.clear();
+                    refreshItems();
+                });
+            });
+
+            // ── Type select ─────────────────────────────────────────────────────
+            q('#arc-type-select').addEventListener('change', function (e) {
+                state.type = e.target.value;
+                state.page = 1;
+                state.selected.clear();
+                refreshItems();
+            });
+
+            // ── Search (debounced) ──────────────────────────────────────────────
+            q('#arc-search').addEventListener('input', function (e) {
+                clearTimeout(state.searchDebounce);
+                state.searchDebounce = setTimeout(function () {
+                    state.search = e.target.value;
+                    state.page = 1;
+                    state.selected.clear();
+                    refreshItems();
+                }, 400);
+            });
+
+            // ── Pagination ──────────────────────────────────────────────────────
+            q('#arc-prev').addEventListener('click', function () {
+                if (state.page > 1) {
+                    state.page--;
+                    state.selected.clear();
+                    refreshItems();
+                }
+            });
+            q('#arc-next').addEventListener('click', function () {
+                var maxPage = Math.max(1, Math.ceil(state.totalCount / PAGE_SIZE));
+                if (state.page < maxPage) {
+                    state.page++;
+                    state.selected.clear();
+                    refreshItems();
+                }
+            });
+
+            // ── Select all on this page ─────────────────────────────────────────
+            q('#arc-select-all').addEventListener('change', function (e) {
+                var ids = qa('#arc-items-body tr').map(function (tr) { return tr.dataset.itemId; });
+                if (e.target.checked) {
+                    ids.forEach(function (id) { state.selected.add(id); });
+                } else {
+                    ids.forEach(function (id) { state.selected.delete(id); });
+                }
+                qa('#arc-items-body input[type=checkbox]').forEach(function (cb) { cb.checked = e.target.checked; });
+                updateBulkBar();
+            });
+
+            // ── Bulk bar actions ────────────────────────────────────────────────
+            q('#arc-bulk-clear').addEventListener('click', function () {
+                state.selected.clear();
+                qa('#arc-items-body input[type=checkbox]').forEach(function (cb) { cb.checked = false; });
+                q('#arc-select-all').checked = false;
+                updateBulkBar();
+            });
+
+            q('#arc-bulk-apply').addEventListener('click', function () {
+                var ids = Array.from(state.selected);
+                if (ids.length === 0) return;
+                var rating = q('#arc-bulk-rating').value.trim();
+                var bulkMsg = q('#arc-bulk-msg');
+                bulkMsg.className = 'arc-msg';
+                bulkMsg.textContent = 'Applying…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('AgeRating/BulkSetRating'),
+                    contentType: 'application/json',
+                    data: JSON.stringify({ ItemIds: ids, Rating: rating }),
+                    dataType: 'json'
+                }).then(function (res) {
+                    bulkMsg.textContent = 'Updated ' + res.UpdatedCount + ' item(s).';
+                    state.selected.clear();
+                    q('#arc-bulk-rating').value = '';
+                    refreshItems();
+                    setTimeout(function () { bulkMsg.textContent = ''; }, 2500);
+                }).catch(function () {
+                    bulkMsg.className = 'arc-msg arc-err';
+                    bulkMsg.textContent = 'Failed. Check server logs.';
+                });
+            });
+
+            function updateBulkBar() {
+                var n = state.selected.size;
+                q('#arc-bulk-n').textContent = n;
+                q('#arc-bulk-bar').classList.toggle('visible', n > 0);
+            }
+
+            // ── Items fetch + render ────────────────────────────────────────────
+            function buildItemsUrl() {
+                var params = new URLSearchParams();
+                params.set('filter', state.filter);
+                params.set('type', state.type);
+                if (state.search) params.set('search', state.search);
+                params.set('page', state.page);
+                params.set('pageSize', PAGE_SIZE);
+                return ApiClient.getUrl('AgeRating/Items?' + params.toString());
+            }
+
+            function refreshItems() {
+                if (state.isLoading) return;
+                state.isLoading = true;
+                renderSkeleton();
+                ApiClient.ajax({ type: 'GET', url: buildItemsUrl(), dataType: 'json' }).then(function (data) {
+                    state.totalCount = data.TotalCount;
+                    renderItems(data.Items);
+                    renderBadges(data.UnratedCount, data.PendingCount);
+                    renderPager();
+                    renderPendingDisplay(data.UnratedCount, data.PendingCount);
+                    state.isLoading = false;
+                }).catch(function () {
+                    state.isLoading = false;
+                    q('#arc-items-body').innerHTML = '';
+                    var empty = q('#arc-empty');
+                    empty.style.display = '';
+                    empty.textContent = 'Failed to load items. Check server logs.';
+                });
+            }
+
+            function renderSkeleton() {
+                var tbody = q('#arc-items-body');
+                var rows = '';
+                for (var i = 0; i < 6; i++) {
+                    rows += '<tr><td></td><td><div class="arc-skel" style="width:60%"></div></td><td><div class="arc-skel" style="width:50%"></div></td><td><div class="arc-skel" style="width:70%"></div></td><td><div class="arc-skel" style="width:70%"></div></td><td><div class="arc-skel" style="width:70%"></div></td></tr>';
+                }
+                tbody.innerHTML = rows;
+                q('#arc-empty').style.display = 'none';
+            }
+
+            function renderItems(items) {
+                var tbody = q('#arc-items-body');
+                tbody.innerHTML = '';
+                var empty = q('#arc-empty');
+                if (!items || items.length === 0) {
+                    empty.style.display = '';
+                    empty.textContent = state.search || state.filter !== 'all' || state.type !== 'all'
+                        ? 'No items match this filter.'
+                        : 'No Movies or Series in the library yet. Run a library scan first.';
+                    q('#arc-select-all').checked = false;
+                    updateBulkBar();
+                    return;
+                }
+                empty.style.display = 'none';
+
+                items.forEach(function (item) {
+                    var tr = document.createElement('tr');
+                    tr.dataset.itemId = item.ItemId;
+                    var parental = item.CurrentRating
+                        ? '<span>' + esc(item.CurrentRating) + '</span>'
+                        : '<span class="arc-none">(none)</span>';
+                    var custom = item.CustomRating
+                        ? '<span class="arc-custom">' + esc(item.CustomRating) + '</span>'
+                        : '<span class="arc-none">—</span>';
+                    var proposed = item.ProposedRating
+                        ? '<span class="arc-arrow">→</span><span class="arc-proposed">' + esc(item.ProposedRating) + '</span>'
+                        : '<span class="arc-none">—</span>';
+                    tr.innerHTML =
+                        '<td class="arc-check-col"><input type="checkbox" class="arc-cb" /></td>' +
+                        '<td>' + esc(item.Name) + '</td>' +
+                        '<td class="arc-type-col">' + esc(item.Type) + '</td>' +
+                        '<td class="arc-rating-col">' + parental + '</td>' +
+                        '<td class="arc-rating-col">' + custom + '</td>' +
+                        '<td class="arc-rating-col">' + proposed + '</td>';
+                    var cb = tr.querySelector('input[type=checkbox]');
+                    cb.checked = state.selected.has(item.ItemId);
+                    cb.addEventListener('change', function () {
+                        if (cb.checked) state.selected.add(item.ItemId);
+                        else state.selected.delete(item.ItemId);
+                        updateBulkBar();
+                        syncSelectAllHeader();
+                    });
+                    tbody.appendChild(tr);
+                });
+                syncSelectAllHeader();
+                updateBulkBar();
+            }
+
+            function syncSelectAllHeader() {
+                var cbs = qa('#arc-items-body input[type=checkbox]');
+                var all = cbs.length > 0 && cbs.every(function (c) { return c.checked; });
+                q('#arc-select-all').checked = all;
+            }
+
+            function renderBadges(unratedCount, pendingCount) {
+                var u = q('#arc-unrated-badge');
+                var p = q('#arc-pending-badge');
+                u.textContent = unratedCount > 0 ? '(' + unratedCount + ')' : '';
+                p.textContent = pendingCount > 0 ? '(' + pendingCount + ')' : '';
+            }
+
+            function renderPager() {
+                var maxPage = Math.max(1, Math.ceil(state.totalCount / PAGE_SIZE));
+                q('#arc-pager-info').textContent = 'Page ' + state.page + ' of ' + maxPage + ' · ' + state.totalCount + ' item(s)';
+                q('#arc-prev').disabled = state.page <= 1;
+                q('#arc-next').disabled = state.page >= maxPage;
+            }
+
+            function renderPendingDisplay(unrated, pending) {
+                var el = q('#arc-pending-display');
+                var parts = [];
+                var toTarget = state.targetSystem ? (' to ' + esc(state.targetSystem)) : '';
+                if (pending === 0) {
+                    parts.push('<span class="arc-status-count ok">No pending custom-rating changes</span>');
+                } else {
+                    parts.push('<span class="arc-status-count warn">' + pending + '</span> item' + (pending === 1 ? '' : 's') + ' have a pending conversion' + toTarget);
+                }
+                if (unrated > 0) {
+                    parts.push('<span class="arc-status-count warn">' + unrated + '</span> unrated');
+                } else {
+                    parts.push('<span class="arc-status-count ok">all rated</span>');
+                }
+                el.innerHTML = parts.join(' · ');
+            }
+        })();
+        </script>
+    </div>
+</body>
+</html>
