@@ -59,7 +59,8 @@ public static class DefaultMappings
 
             foreach (var sr in ratings)
             {
-                if (!targetByBucket.TryGetValue(sr.Bucket, out var targetRating))
+                var targetRating = FindClosestTarget(targetByBucket, sr.Bucket);
+                if (targetRating is null)
                 {
                     continue;
                 }
@@ -98,5 +99,46 @@ public static class DefaultMappings
         });
 
         return result;
+    }
+
+    // Finds the best target rating for a source bucket when the target system
+    // doesn't have an exact match. Walks outward from the source bucket,
+    // preferring higher (more restrictive) buckets on tie so a Mature-source
+    // movie isn't understated as Family when both are equidistant. Falls back
+    // to lower buckets when the target has nothing above (e.g. Sweden caps at
+    // Teen, so Adult-source ratings clamp down to "15"). NotRated is intentionally
+    // left unmapped unless the target explicitly defines it.
+    private static string? FindClosestTarget(
+        Dictionary<AgeBucket, string> targetByBucket,
+        AgeBucket sourceBucket)
+    {
+        if (sourceBucket == AgeBucket.NotRated)
+        {
+            return targetByBucket.TryGetValue(sourceBucket, out var nr) ? nr : null;
+        }
+
+        if (targetByBucket.TryGetValue(sourceBucket, out var exact))
+        {
+            return exact;
+        }
+
+        const int maxBucket = (int)AgeBucket.Restricted;
+        var src = (int)sourceBucket;
+        for (var d = 1; d <= maxBucket; d++)
+        {
+            var high = src + d;
+            if (high <= maxBucket && targetByBucket.TryGetValue((AgeBucket)high, out var higher))
+            {
+                return higher;
+            }
+
+            var low = src - d;
+            if (low >= 0 && targetByBucket.TryGetValue((AgeBucket)low, out var lower))
+            {
+                return lower;
+            }
+        }
+
+        return null;
     }
 }

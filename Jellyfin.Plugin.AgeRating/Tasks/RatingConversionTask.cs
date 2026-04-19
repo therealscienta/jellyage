@@ -59,6 +59,7 @@ public class RatingConversionTask : ILibraryPostScanTask
 
         var total = items.Count;
         var converted = 0;
+        var unmappedCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < total; i++)
         {
@@ -74,6 +75,7 @@ public class RatingConversionTask : ILibraryPostScanTask
 
             if (!mappings.TryGetValue(source.Trim(), out var target))
             {
+                unmappedCounts[source.Trim()] = unmappedCounts.GetValueOrDefault(source.Trim()) + 1;
                 progress.Report(100.0 * i / total);
                 continue;
             }
@@ -104,6 +106,19 @@ public class RatingConversionTask : ILibraryPostScanTask
         }
 
         _logger.LogInformation("Age Rating Converter: converted {Count}/{Total} items.", converted, total);
+
+        if (unmappedCounts.Count > 0)
+        {
+            var top = unmappedCounts
+                .OrderByDescending(kv => kv.Value)
+                .Take(20)
+                .Select(kv => $"'{kv.Key}'×{kv.Value}");
+            _logger.LogInformation(
+                "Age Rating Converter: {Skipped} item(s) had no mapping. Unmapped source ratings: {Summary}",
+                unmappedCounts.Values.Sum(),
+                string.Join(", ", top));
+        }
+
         progress.Report(100);
     }
 

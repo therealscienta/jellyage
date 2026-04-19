@@ -56,6 +56,30 @@
 
             .arc-card-hint { color: #888; margin: 0.6em 0 0; font-size: 0.9em; }
 
+            /* Persistence status card — surfaces per-library NFO saver state so
+               the admin can tell at a glance whether Custom rating changes will
+               survive a full rescan. Left-border color encodes the aggregate
+               state: green = all libraries persist, amber = partial, grey = none. */
+            .arc-persist { margin: 0.8em 0 0; border-left: 3px solid #666; background: rgba(255,255,255,0.02); border-radius: 0 4px 4px 0; font-size: 0.9em; }
+            .arc-persist.arc-persist-ok { border-left-color: #8ec46e; }
+            .arc-persist.arc-persist-mixed { border-left-color: #e8a56e; }
+            .arc-persist-summary { display: flex; align-items: center; gap: 0.6em; padding: 0.5em 0.8em; cursor: pointer; user-select: none; }
+            .arc-persist-summary:hover { background: rgba(255,255,255,0.03); }
+            .arc-persist-text { flex: 1; color: #bbb; }
+            .arc-persist-toggle { color: #888; font-size: 0.85em; }
+            .arc-persist-details { display: none; padding: 0 0.8em 0.6em 0.8em; border-top: 1px solid rgba(255,255,255,0.06); }
+            .arc-persist.arc-persist-open .arc-persist-details { display: block; }
+            .arc-persist-list { list-style: none; margin: 0.4em 0 0; padding: 0; }
+            .arc-persist-list li { display: flex; align-items: center; gap: 0.6em; padding: 0.3em 0; color: #bbb; }
+            .arc-persist-pill { display: inline-block; min-width: 5.2em; text-align: center; padding: 0.1em 0.5em; border-radius: 10px; font-size: 0.8em; }
+            .arc-persist-pill.arc-pill-ok { background: rgba(142,196,110,0.18); color: #a0d080; }
+            .arc-persist-pill.arc-pill-off { background: rgba(120,120,120,0.18); color: #aaa; }
+            .arc-persist-pill.arc-pill-partial { background: rgba(232,165,110,0.18); color: #e0b080; }
+            .arc-persist-lib-name { flex: 1; }
+            .arc-persist-link { color: #888; font-size: 0.85em; text-decoration: none; }
+            .arc-persist-link:hover { color: #00a4dc; }
+            .arc-persist-foot { color: #888; font-size: 0.85em; margin: 0.6em 0 0; }
+
             .arc-pager { display: flex; gap: 0.6em; align-items: center; justify-content: flex-end; margin-top: 0.8em; color: #aaa; }
             .arc-pager .arc-pager-info { margin: 0 0.6em; }
 
@@ -79,6 +103,20 @@
             .arc-bulk-bar .arc-bulk-count { font-weight: 600; flex-shrink: 0; }
             .arc-bulk-bar .arc-bulk-rating-input { flex: 0 1 180px; }
             .arc-bulk-bar .arc-bulk-spacer { flex: 1 0 auto; }
+
+            .arc-system-info { margin: 0.5em 0 0; font-size: 0.9em; color: #aaa; }
+            .arc-system-info .arc-system-name { color: #ccc; font-weight: 600; }
+            .arc-system-info .arc-system-ratings { color: #00a4dc; }
+            .arc-rating-select { padding: 6px 10px; }
+            .arc-filter-group { display: inline-flex; gap: 0.6em; align-items: center; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
+            .arc-filter-group > select,
+            .arc-filter-group [is="emby-select"] { flex: 0 1 170px; width: 170px; min-width: 120px; max-width: 200px; padding: 6px 10px; }
+            .arc-filters { row-gap: 0.5em; }
+            @media (max-width: 720px) {
+                .arc-filter-group { flex-basis: 100%; margin-left: 0; }
+            }
+            .arc-title-link { color: inherit; text-decoration: none; }
+            .arc-title-link:hover { color: #00a4dc; text-decoration: underline; }
         </style>
 
         <div data-role="content">
@@ -111,14 +149,25 @@
                         </button>
                     </div>
                     <div id="arc-automation-msg" class="arc-msg"></div>
-                    <p class="arc-card-hint">
-                        Writes to each item's <em>Custom rating</em>, leaving the parental rating from
-                        metadata providers intact. Changes always persist in Jellyfin's database.
-                        To also save <code>&lt;customrating&gt;</code> to the NFO file on disk
-                        (recommended if you want changes to survive a full rescan), enable the
-                        <em>Nfo</em> saver under
-                        Dashboard&nbsp;→&nbsp;Libraries&nbsp;→&nbsp;<em>library</em>&nbsp;→&nbsp;Metadata&nbsp;savers.
-                    </p>
+                    <div id="arc-system-info" class="arc-system-info" style="display:none;">
+                        Active system: <span id="arc-system-name" class="arc-system-name"></span>
+                        — <span id="arc-system-ratings" class="arc-system-ratings"></span>
+                    </div>
+                    <div id="arc-persist" class="arc-persist" style="display:none;">
+                        <div class="arc-persist-summary" id="arc-persist-summary">
+                            <span class="arc-persist-text" id="arc-persist-text">Checking libraries…</span>
+                            <span class="arc-persist-toggle" id="arc-persist-toggle">Details ▾</span>
+                        </div>
+                        <div class="arc-persist-details">
+                            <ul class="arc-persist-list" id="arc-persist-list"></ul>
+                            <p class="arc-persist-foot">
+                                Changes always persist in Jellyfin's database. To also save
+                                <code>&lt;customrating&gt;</code> to the NFO file on disk, enable the
+                                <em>Nfo</em> saver <em>and</em> <em>Save artwork and metadata into media folders</em>
+                                under Dashboard&nbsp;→&nbsp;Libraries&nbsp;→&nbsp;<em>library</em>.
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- ── Items working surface ────────────────────────────────────── -->
@@ -130,11 +179,16 @@
                         <button class="arc-chip active" data-filter="all">All</button>
                         <button class="arc-chip" data-filter="unrated">Unrated <span id="arc-unrated-badge"></span></button>
                         <button class="arc-chip" data-filter="pending">Has pending change <span id="arc-pending-badge"></span></button>
-                        <select id="arc-type-select" is="emby-select" class="arc-type-select">
-                            <option value="all">All types</option>
-                            <option value="Movie">Movies</option>
-                            <option value="Series">Series</option>
-                        </select>
+                        <div class="arc-filter-group">
+                            <select id="arc-type-select" is="emby-select" class="arc-type-select">
+                                <option value="all">All types</option>
+                                <option value="Movie">Movies</option>
+                                <option value="Series">Series</option>
+                            </select>
+                            <select id="arc-rating-select" is="emby-select" class="arc-rating-select">
+                                <option value="">All ratings</option>
+                            </select>
+                        </div>
                     </div>
 
                     <div id="arc-table-wrap">
@@ -190,6 +244,7 @@
                 filter: 'all',     // all | unrated | pending
                 type: 'all',       // all | Movie | Series
                 search: '',
+                ratingFilter: '',  // exact effective rating to filter by, '' = none
                 page: 1,
                 totalCount: 0,
                 selected: new Set(), // item IDs selected on the CURRENT page
@@ -197,6 +252,9 @@
                 isLoading: false,
                 targetSystem: '',      // config DefaultTargetSystem, e.g. "BBFC"
                 targetExample: '',     // representative rating, e.g. "12A"
+                persistence: null,     // array of LibraryPersistenceDto, null until loaded
+                persistAutoExpanded: false, // one-shot: only auto-expand the details once per session
+                lastPendingCount: 0,   // cached so persistence-load and items-load can coordinate
             };
 
             // ── Helpers ──────────────────────────────────────────────────────────
@@ -210,14 +268,24 @@
             // ── Initial load ─────────────────────────────────────────────────────
             q('#AgeRatingsMainPage').addEventListener('pageshow', function () {
                 loadConfig();
+                loadLibraryPersistence();
                 refreshItems();
+            });
+
+            // Toggle the per-library details; wired once at pageshow scope so that
+            // re-rendering the summary text (counts changing) doesn't need to re-bind.
+            document.addEventListener('click', function (ev) {
+                var summary = ev.target.closest('#arc-persist-summary');
+                if (!summary) return;
+                var card = q('#arc-persist');
+                if (!card) return;
+                card.classList.toggle('arc-persist-open');
+                var tog = q('#arc-persist-toggle');
+                if (tog) tog.textContent = card.classList.contains('arc-persist-open') ? 'Details ▴' : 'Details ▾';
             });
 
             // ── Config load + auto-save toggles ──────────────────────────────────
             function loadConfig() {
-                // Load config and the supported-systems list in parallel; the
-                // latter gives us a representative rating to use as the bulk-edit
-                // placeholder when a target system is configured.
                 var configPromise = ApiClient.getPluginConfiguration(PLUGIN_ID);
                 var systemsPromise = ApiClient.ajax({
                     type: 'GET',
@@ -233,7 +301,147 @@
                     var match = systems.find(function (s) { return s.Id === state.targetSystem; });
                     state.targetExample = match ? match.ExampleRating : '';
                     applyTargetLabels();
+                    if (state.targetSystem) {
+                        loadSystemInfo(state.targetSystem, match ? match.DisplayName : state.targetSystem);
+                    }
                 });
+                loadRatingSummary();
+            }
+
+            function loadSystemInfo(systemId, displayName) {
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/SystemRatings?system=' + encodeURIComponent(systemId)),
+                    dataType: 'json'
+                }).then(function (ratings) {
+                    if (!ratings || ratings.length === 0) return;
+                    q('#arc-system-name').textContent = displayName;
+                    q('#arc-system-ratings').textContent = ratings.join(' · ');
+                    q('#arc-system-info').style.display = '';
+                }).catch(function () {});
+            }
+
+            function loadLibraryPersistence() {
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/LibraryPersistence'),
+                    dataType: 'json'
+                }).then(function (libs) {
+                    state.persistence = libs || [];
+                    renderPersistence();
+                }).catch(function () {
+                    // Endpoint failure shouldn't break the page; hide the card so the
+                    // admin isn't stuck on "Checking libraries…" with nothing actionable.
+                    state.persistence = [];
+                    var card = q('#arc-persist');
+                    if (card) card.style.display = 'none';
+                });
+            }
+
+            function renderPersistence() {
+                var card = q('#arc-persist');
+                if (!card) return;
+                var libs = state.persistence || [];
+                if (libs.length === 0) {
+                    card.style.display = 'none';
+                    return;
+                }
+                card.style.display = '';
+
+                var persisting = libs.filter(function (l) { return l.PersistsToDisk; });
+                var nfoOnly = libs.filter(function (l) { return !l.PersistsToDisk && l.NfoSaverEnabled; });
+                var allOk = persisting.length === libs.length;
+                var none = persisting.length === 0 && nfoOnly.length === 0;
+
+                card.classList.remove('arc-persist-ok', 'arc-persist-mixed');
+                if (allOk) {
+                    card.classList.add('arc-persist-ok');
+                } else if (!none) {
+                    card.classList.add('arc-persist-mixed');
+                }
+
+                var summary;
+                if (allOk) {
+                    summary = 'Persistence · <code>&lt;customrating&gt;</code> saved to NFO in all '
+                            + libs.length + ' libraries';
+                } else if (none) {
+                    summary = 'Persistence · changes stay in Jellyfin\'s database only '
+                            + '(' + libs.length + ' librar' + (libs.length === 1 ? 'y' : 'ies') + ')';
+                } else {
+                    summary = 'Persistence · '
+                           + persisting.length + ' of ' + libs.length
+                           + ' librar' + (libs.length === 1 ? 'y' : 'ies') + ' save <code>&lt;customrating&gt;</code> to NFO';
+                }
+                q('#arc-persist-text').innerHTML = summary;
+
+                var list = q('#arc-persist-list');
+                list.innerHTML = '';
+                libs.forEach(function (l) {
+                    var li = document.createElement('li');
+                    var pillClass, pillText;
+                    if (l.PersistsToDisk) {
+                        pillClass = 'arc-pill-ok';
+                        pillText = 'NFO + DB';
+                    } else if (l.NfoSaverEnabled) {
+                        pillClass = 'arc-pill-partial';
+                        pillText = 'Existing NFOs';
+                    } else {
+                        pillClass = 'arc-pill-off';
+                        pillText = 'DB only';
+                    }
+                    // Jellyfin's library editor is a modal on the Libraries list — there's no
+                    // route that opens a specific library directly. Link to the list page and
+                    // let the admin click the matching row; we surfaced the name above so the
+                    // matching is obvious.
+                    var linkHtml = '<a class="arc-persist-link" href="#/dashboard/libraries">Open in Dashboard ↗</a>';
+                    li.innerHTML = '<span class="arc-persist-pill ' + pillClass + '">' + pillText + '</span>'
+                                 + '<span class="arc-persist-lib-name">' + esc(l.Name) + '</span>'
+                                 + linkHtml;
+                    list.appendChild(li);
+                });
+
+                maybeAutoExpandPersistence();
+            }
+
+            function maybeAutoExpandPersistence() {
+                // One-shot nudge: if the admin has pending conversions AND no library
+                // will persist them to disk, open the details so they see why. After the
+                // first time, stay out of their way — repeated opens would be annoying.
+                if (state.persistAutoExpanded) return;
+                var libs = state.persistence || [];
+                if (libs.length === 0) return;
+                var anyPersists = libs.some(function (l) { return l.PersistsToDisk; });
+                if (state.lastPendingCount > 0 && !anyPersists) {
+                    var card = q('#arc-persist');
+                    if (card && !card.classList.contains('arc-persist-open')) {
+                        card.classList.add('arc-persist-open');
+                        var tog = q('#arc-persist-toggle');
+                        if (tog) tog.textContent = 'Details ▴';
+                    }
+                    state.persistAutoExpanded = true;
+                }
+            }
+
+            function loadRatingSummary() {
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/RatingSummary'),
+                    dataType: 'json'
+                }).then(function (entries) {
+                    var sel = q('#arc-rating-select');
+                    var current = sel.value;
+                    // keep the first "All ratings" option, rebuild the rest
+                    while (sel.options.length > 1) sel.remove(1);
+                    (entries || []).forEach(function (e) {
+                        var opt = document.createElement('option');
+                        opt.value = e.Rating;
+                        opt.textContent = e.Rating + ' (' + e.Count + ')';
+                        sel.appendChild(opt);
+                    });
+                    // restore selection if the value still exists
+                    sel.value = current;
+                    if (sel.value !== current) sel.value = '';
+                }).catch(function () {});
             }
 
             // Update UI elements that reflect the chosen target system.
@@ -276,6 +484,7 @@
                     msg.textContent = 'Conversion complete.';
                     setTimeout(function () { if (msg.textContent === 'Conversion complete.') msg.textContent = ''; }, 2000);
                     refreshItems();
+                    loadRatingSummary();
                 }).catch(function () {
                     msg.className = 'arc-msg arc-err';
                     msg.textContent = 'Conversion failed. Check server logs.';
@@ -297,6 +506,14 @@
             // ── Type select ─────────────────────────────────────────────────────
             q('#arc-type-select').addEventListener('change', function (e) {
                 state.type = e.target.value;
+                state.page = 1;
+                state.selected.clear();
+                refreshItems();
+            });
+
+            // ── Rating filter ────────────────────────────────────────────────────
+            q('#arc-rating-select').addEventListener('change', function (e) {
+                state.ratingFilter = e.target.value;
                 state.page = 1;
                 state.selected.clear();
                 refreshItems();
@@ -368,6 +585,7 @@
                     state.selected.clear();
                     q('#arc-bulk-rating').value = '';
                     refreshItems();
+                    loadRatingSummary();
                     setTimeout(function () { bulkMsg.textContent = ''; }, 2500);
                 }).catch(function () {
                     bulkMsg.className = 'arc-msg arc-err';
@@ -387,6 +605,7 @@
                 params.set('filter', state.filter);
                 params.set('type', state.type);
                 if (state.search) params.set('search', state.search);
+                if (state.ratingFilter) params.set('rating', state.ratingFilter);
                 params.set('page', state.page);
                 params.set('pageSize', PAGE_SIZE);
                 return ApiClient.getUrl('AgeRating/Items?' + params.toString());
@@ -398,10 +617,12 @@
                 renderSkeleton();
                 ApiClient.ajax({ type: 'GET', url: buildItemsUrl(), dataType: 'json' }).then(function (data) {
                     state.totalCount = data.TotalCount;
+                    state.lastPendingCount = data.PendingCount;
                     renderItems(data.Items);
                     renderBadges(data.UnratedCount, data.PendingCount);
                     renderPager();
                     renderPendingDisplay(data.UnratedCount, data.PendingCount);
+                    maybeAutoExpandPersistence();
                     state.isLoading = false;
                 }).catch(function () {
                     state.isLoading = false;
@@ -449,9 +670,10 @@
                     var proposed = item.ProposedRating
                         ? '<span class="arc-arrow">→</span><span class="arc-proposed">' + esc(item.ProposedRating) + '</span>'
                         : '<span class="arc-none">—</span>';
+                    var nameHtml = '<a class="arc-title-link" href="#!/details?id=' + encodeURIComponent(item.ItemId) + '">' + esc(item.Name) + '</a>';
                     tr.innerHTML =
                         '<td class="arc-check-col"><input type="checkbox" class="arc-cb" /></td>' +
-                        '<td>' + esc(item.Name) + '</td>' +
+                        '<td>' + nameHtml + '</td>' +
                         '<td class="arc-type-col">' + esc(item.Type) + '</td>' +
                         '<td class="arc-rating-col">' + parental + '</td>' +
                         '<td class="arc-rating-col">' + custom + '</td>' +

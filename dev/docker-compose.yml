@@ -42,7 +42,7 @@ services:
     volumes:
       - ../.dev-env/config:/config
       - ../.dev-env/cache:/cache
-      - ../.dev-env/media:/media:ro
+      - ../.dev-env/media:/media
     environment:
       TZ: Europe/Stockholm
       JELLYFIN_PublishedServerUrl: http://localhost:8096

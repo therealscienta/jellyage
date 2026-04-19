@@ -79,12 +79,132 @@ public class RatingController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the ordered list of rating strings for a given system.
+    /// </summary>
+    /// <param name="system">System identifier, e.g. "Sweden".</param>
+    /// <returns>Rating strings in system order (primary ratings only).</returns>
+    [HttpGet("SystemRatings")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public ActionResult<IReadOnlyList<string>> GetSystemRatings([FromQuery] string? system)
+    {
+        if (string.IsNullOrWhiteSpace(system))
+        {
+            return BadRequest("Missing required query parameter: system.");
+        }
+
+        if (!SystemRatings.All.TryGetValue(system, out var ratings))
+        {
+            return BadRequest($"Unknown system: '{system}'.");
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var r in ratings)
+        {
+            if (seen.Add(r.Rating))
+            {
+                result.Add(r.Rating);
+            }
+        }
+
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Returns per-library persistence status so the UI can tell the admin
+    /// whether Custom rating changes will be written back to NFO files on disk
+    /// or kept only in Jellyfin's database.
+    /// </summary>
+    /// <returns>One entry per virtual folder (library).</returns>
+    [HttpGet("LibraryPersistence")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<IReadOnlyList<LibraryPersistenceDto>> GetLibraryPersistence()
+    {
+        // Only Movie/TV libraries are interesting here — that's what the conversion task touches.
+        // A null CollectionType represents a "Mixed" library (movies + shows) so it stays in too.
+        // Music/Books/BoxSets etc. still expose MetadataSavers but their presence would just clutter the UI.
+        var result = new List<LibraryPersistenceDto>();
+        foreach (var vf in _libraryManager.GetVirtualFolders())
+        {
+            var ct = vf.CollectionType;
+            if (ct is not null
+                && ct != MediaBrowser.Model.Entities.CollectionTypeOptions.movies
+                && ct != MediaBrowser.Model.Entities.CollectionTypeOptions.tvshows)
+            {
+                continue;
+            }
+
+            var options = vf.LibraryOptions;
+            var savers = options?.MetadataSavers ?? Array.Empty<string>();
+            var nfoEnabled = Array.Exists(savers, s => string.Equals(s, "Nfo", StringComparison.OrdinalIgnoreCase));
+            var saveLocal = options?.SaveLocalMetadata ?? false;
+
+            result.Add(new LibraryPersistenceDto
+            {
+                Name = vf.Name ?? string.Empty,
+                ItemId = vf.ItemId ?? string.Empty,
+                NfoSaverEnabled = nfoEnabled,
+                SaveLocalMetadata = saveLocal,
+                // The Nfo saver's gate is "SaveLocalMetadata is on OR an NFO file already exists".
+                // We can't check every item's filesystem here, so we report the coarse answer:
+                // the library *will* persist changes if both the saver is on AND local metadata
+                // is enabled. If only the saver is on, existing NFOs will still be updated — we
+                // express that nuance in the UI copy, not in this boolean.
+                PersistsToDisk = nfoEnabled && saveLocal,
+            });
+        }
+
+        return Ok(result
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList());
+    }
+
+    /// <summary>
+    /// Returns the count of library items grouped by their effective rating
+    /// (CustomRating preferred over OfficialRating). Items with no effective rating
+    /// or an unrated-value are excluded — they are already surfaced by the Unrated filter.
+    /// </summary>
+    /// <returns>Rating/Count pairs sorted alphabetically by rating.</returns>
+    [HttpGet("RatingSummary")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<IReadOnlyList<RatingSummaryEntryDto>> GetRatingSummary()
+    {
+        var unratedSet = GetUnratedSet();
+        var items = GetMovieAndSeriesItems();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in items)
+        {
+            var custom = item.CustomRating;
+            var source = item.OfficialRating;
+            var eff = !string.IsNullOrWhiteSpace(custom) ? custom : source;
+            if (string.IsNullOrWhiteSpace(eff) || unratedSet.Contains(eff.Trim()))
+            {
+                continue;
+            }
+
+            var key = eff.Trim();
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+
+        return Ok(counts
+            .Select(kv => new RatingSummaryEntryDto { Rating = kv.Key, Count = kv.Value })
+            .OrderBy(x => x.Rating, StringComparer.OrdinalIgnoreCase)
+            .ToList());
+    }
+
+    /// <summary>
     /// Unified paginated list of Movies and Series, optionally filtered by rating state,
     /// type, or name substring. Also returns global Unrated/Pending counts for badge display.
     /// </summary>
     /// <param name="filter">One of "all", "unrated", "pending". Defaults to "all".</param>
     /// <param name="type">One of "all", "Movie", "Series". Defaults to "all".</param>
     /// <param name="search">Case-insensitive name substring.</param>
+    /// <param name="rating">Exact effective rating to filter by (case-insensitive). Empty = no filter.</param>
     /// <param name="page">1-based page number.</param>
     /// <param name="pageSize">Items per page (clamped to [1, 500]).</param>
     /// <returns>A paginated item list with aggregate counts.</returns>
@@ -95,6 +215,7 @@ public class RatingController : ControllerBase
         [FromQuery] string? filter = "all",
         [FromQuery] string? type = "all",
         [FromQuery] string? search = null,
+        [FromQuery] string? rating = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = DefaultPageSize)
     {
@@ -188,6 +309,16 @@ public class RatingController : ControllerBase
         {
             var needle = search.Trim();
             filtered = filtered.Where(r => r.Name.Contains(needle, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(rating))
+        {
+            var ratingTrimmed = rating.Trim();
+            filtered = filtered.Where(r =>
+            {
+                var eff = !string.IsNullOrWhiteSpace(r.CustomRating) ? r.CustomRating : r.CurrentRating;
+                return string.Equals(eff?.Trim(), ratingTrimmed, StringComparison.OrdinalIgnoreCase);
+            });
         }
 
         var ordered = filtered
