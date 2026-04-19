@@ -48,15 +48,17 @@ Follow the patterns already established in the existing files rather than introd
 | `Jellyfin.Plugin.AgeRating/Configuration/PluginConfiguration.cs` | Persisted settings: `EnableAutoConversion`, `OverwriteExistingRatings`, `UnratedValues`, `MappingTableJson`, `DefaultTargetSystem`. |
 | `Jellyfin.Plugin.AgeRating/Configuration/RatingMapping.cs` | Plain `{ Source, Target }` record used inside `MappingTableJson`. |
 | `Jellyfin.Plugin.AgeRating/Configuration/configPage.html` | Config surface (Dashboard → Plugins → Age Rating Converter). Target-system dropdown, unrated-values input, mapping-table editor with confirmation dialog. |
-| `Jellyfin.Plugin.AgeRating/Configuration/mainPage.html` | Primary surface (Dashboard → Age Ratings). Automation status, paginated searchable item list, filter chips, multi-select bulk-edit bar. |
+| `Jellyfin.Plugin.AgeRating/Configuration/mainPage.html` | Primary surface (Dashboard → Age Ratings). Automation card (pending count, toggles, Run Now, active-system banner, NFO persistence status card), paginated searchable item list, filter chips, rating/type dropdowns, multi-select bulk-edit bar. Item titles are clickable links to the Jellyfin detail page. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/AgeBucket.cs` | 8-value age-tier enum (All / Mild / Family / Teen / Mature / Adult / Restricted / NotRated) — the pivot between otherwise-incompatible rating systems. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/SystemRating.cs` | Record `(Rating, Bucket)`. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/SystemDescriptor.cs` | Record `(Id, DisplayName, ExampleRating)` — what `/SupportedSystems` returns. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/SystemRatings.cs` | Catalogue of 17 supported systems and their bucketed ratings. Single source of truth. |
-| `Jellyfin.Plugin.AgeRating/RatingMappings/DefaultMappings.cs` | `Generate(targetSystem)` — emits `source → target` rows pivoting through age buckets. |
+| `Jellyfin.Plugin.AgeRating/RatingMappings/DefaultMappings.cs` | `Generate(targetSystem)` — emits `source → target` rows pivoting through age buckets. `FindClosestTarget` clamps source buckets with no exact match to the nearest available target bucket (prefers higher/more-restrictive; falls back lower when the target system caps below the source, e.g. NC-17 → Sweden's `15`). |
 | `Jellyfin.Plugin.AgeRating/Tasks/RatingConversionTask.cs` | `ILibraryPostScanTask`. `BuildLookup()` is `internal static` so the API controller reuses it. |
 | `Jellyfin.Plugin.AgeRating/Api/RatingController.cs` | REST controller at `/AgeRating/`. `RequiresElevation` policy on every route. |
 | `Jellyfin.Plugin.AgeRating/Api/ItemListDto.cs`, `ItemRowDto.cs`, `BulkSetRatingRequestDto.cs`, `BulkSetRatingResponseDto.cs`, `RatingPreviewDto.cs` | API DTOs. |
+| `Jellyfin.Plugin.AgeRating/Api/LibraryPersistenceDto.cs` | Response shape for `GET /AgeRating/LibraryPersistence` — per-library NFO saver status. |
+| `Jellyfin.Plugin.AgeRating/Api/RatingSummaryEntryDto.cs` | Response shape for `GET /AgeRating/RatingSummary` — effective-rating / count pair. |
 | `build.yaml` | Plugin metadata for the build/packaging pipeline. Must stay in sync with `Plugin.cs`'s GUID, the assembly version, and `targetAbi`. |
 | `manifest.json` | Jellyfin plugin-repository manifest served over HTTP (see Releasing). |
 
@@ -78,6 +80,8 @@ The plugin writes **`CustomRating`**, not `OfficialRating`. Source of the lookup
 4. Skip if `CustomRating` already equals the mapping target (idempotency).
 5. Otherwise set `item.CustomRating = target` and call `item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)`.
 
+After the loop, the task logs a summary of the top 20 unmapped source ratings (with occurrence counts) at `Information` level. This makes "0/N items converted" diagnosable without enabling debug logging — admins can see which `OfficialRating` values have no matching mapping row.
+
 If the library has Jellyfin's Nfo metadata saver enabled, the change also persists to `<customrating>` in the NFO on disk. Without the saver, changes stay in Jellyfin's DB (still survives routine metadata refreshes; only a full `ReplaceAllMetadata` clears `CustomRating`).
 
 ## API endpoints
@@ -86,9 +90,12 @@ All endpoints require the `RequiresElevation` authorisation policy.
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&page=&pageSize=` | Paginated `ItemListDto` with `Items`, `TotalCount`, `Page`, `PageSize`, `UnratedCount`, `PendingCount`. Server-side filter + search. |
+| `GET /AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&rating=&page=&pageSize=` | Paginated `ItemListDto` with `Items`, `TotalCount`, `Page`, `PageSize`, `UnratedCount`, `PendingCount`. Server-side filter + search + exact effective-rating filter. |
 | `GET /AgeRating/SupportedSystems` | `IReadOnlyList<SystemDescriptor>` — 17 systems with `Id`, `DisplayName`, `ExampleRating`. |
 | `GET /AgeRating/DefaultMappings?target={id}` | `IReadOnlyList<RatingMapping>` generated for the given target. 400 on unknown/missing target. |
+| `GET /AgeRating/SystemRatings?system={id}` | `IReadOnlyList<string>` — ordered primary ratings for the given system (duplicates removed). Used to populate the active-system banner. |
+| `GET /AgeRating/RatingSummary` | `IReadOnlyList<RatingSummaryEntryDto>` — effective-rating / count pairs for all Movies and Series (CustomRating preferred). Used to populate the rating filter dropdown. |
+| `GET /AgeRating/LibraryPersistence` | `IReadOnlyList<LibraryPersistenceDto>` — per-library NFO saver status for Movie/TV/Mixed libraries. `PersistsToDisk = NfoSaverEnabled && SaveLocalMetadata`. |
 | `GET /AgeRating/Preview` | `IEnumerable<RatingPreviewDto>` — items whose next conversion run would actually change `CustomRating`. |
 | `POST /AgeRating/ApplyNow` | Runs `RatingConversionTask.Run()` inline; 200 when done. |
 | `POST /AgeRating/BulkSetRating` | Body `{ ItemIds, Rating }`; writes `Rating` to every listed item's `CustomRating` (empty string clears). Returns `{ UpdatedCount }`. |
