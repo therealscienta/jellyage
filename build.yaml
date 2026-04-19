@@ -1,7 +1,7 @@
 ---
 name: "Age Rating Converter"
 guid: "3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07"
-version: "1.0.0.0"
+version: "1.1.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Converts media age ratings between rating systems (MPAA, BBFC, FSK, and more) using a user-defined mapping table."
@@ -15,4 +15,6 @@ owner: "jellyfin"
 artifacts:
 - "Jellyfin.Plugin.AgeRating.dll"
 changelog: >
-  Initial release.
+  Rating filter dropdown, per-library NFO persistence status card, active-system banner,
+  clickable item titles, and bucket clamping so ratings like NC-17 map to the nearest
+  available target (e.g. Sweden's 15) instead of being silently skipped.
