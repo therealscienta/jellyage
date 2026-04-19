@@ -4,6 +4,16 @@ Convert media age ratings between systems (MPAA, BBFC, FSK, CNC, PEGI, Kijkwijze
 
 The plugin writes to Jellyfin's **CustomRating** field rather than overwriting `OfficialRating`. Jellyfin already prefers `CustomRating` for parental-control decisions when it's set, so the visible effect matches what users expect — but the provider's original rating stays intact across refreshes.
 
+## Screenshots
+
+**Age Ratings page** — day-to-day item list with automation controls and persistence status:
+
+![Age Ratings main page](docs/screenshots/main-page.png)
+
+**Settings page** — target system selection and mapping table editor:
+
+![Config page](docs/screenshots/config-page.png)
+
 ## Features
 
 - **Target-system-driven defaults** — pick your household's rating system (e.g. BBFC) once; built-in defaults map every other supported system's ratings onto yours.
