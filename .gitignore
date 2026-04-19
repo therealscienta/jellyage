@@ -19,3 +19,11 @@ Thumbs.db
 
 # Local dev harness state (plugin DLL drops, mock media, dist/ zips, Jellyfin config)
 .dev-env/
+
+# Node.js (playwright screenshot tooling — not a Node project)
+node_modules/
+package.json
+package-lock.json
+
+# Playwright MCP output
+.playwright-mcp/
