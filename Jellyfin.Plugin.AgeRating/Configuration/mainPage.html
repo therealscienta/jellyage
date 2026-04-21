@@ -179,6 +179,7 @@
                         <button class="arc-chip active" data-filter="all">All</button>
                         <button class="arc-chip" data-filter="unrated">Unrated <span id="arc-unrated-badge"></span></button>
                         <button class="arc-chip" data-filter="pending">Has pending change <span id="arc-pending-badge"></span></button>
+                        <button class="arc-chip" data-filter="nomapping">No mapping match <span id="arc-nomapping-badge"></span></button>
                         <div class="arc-filter-group">
                             <select id="arc-type-select" is="emby-select" class="arc-type-select">
                                 <option value="all">All types</option>
@@ -619,7 +620,7 @@
                     state.totalCount = data.TotalCount;
                     state.lastPendingCount = data.PendingCount;
                     renderItems(data.Items);
-                    renderBadges(data.UnratedCount, data.PendingCount);
+                    renderBadges(data.UnratedCount, data.PendingCount, data.NoMappingCount);
                     renderPager();
                     renderPendingDisplay(data.UnratedCount, data.PendingCount);
                     maybeAutoExpandPersistence();
@@ -698,11 +699,15 @@
                 q('#arc-select-all').checked = all;
             }
 
-            function renderBadges(unratedCount, pendingCount) {
+            function renderBadges(unratedCount, pendingCount, noMappingCount) {
                 var u = q('#arc-unrated-badge');
                 var p = q('#arc-pending-badge');
+                var n = q('#arc-nomapping-badge');
                 u.textContent = unratedCount > 0 ? '(' + unratedCount + ')' : '';
                 p.textContent = pendingCount > 0 ? '(' + pendingCount + ')' : '';
+                if (n) {
+                    n.textContent = noMappingCount > 0 ? '(' + noMappingCount + ')' : '';
+                }
             }
 
             function renderPager() {

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Age Rating Converter</title>
+    <title>Age Rating Converter BUILDMARKER_AZBY</title>
 </head>
 <body>
     <div id="AgeRatingConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
@@ -18,6 +18,11 @@
             .arc-table th { font-weight: 600; color: #aaa; font-size: 0.85em; letter-spacing: 0.03em; text-transform: uppercase; }
             .arc-table input { width: 100%; box-sizing: border-box; }
             .arc-table .del-btn { cursor: pointer; color: #e87070; background: none; border: none; font-size: 1.1em; }
+            .arc-manual-mark { color:#8ec46e; margin-right:4px; font-size:0.9em; }
+            .arc-manual-mark.arc-manual-hidden { visibility: hidden; }
+            .arc-chip-row { display:flex; flex-wrap:wrap; gap:6px; }
+            .arc-unmapped-chip { background:#2a2a2a; border:1px solid #3a3a3a; color:#ddd; border-radius:999px; padding:4px 10px; cursor:pointer; font-size:0.9em; }
+            .arc-unmapped-chip:hover { background:#333; border-color:#4a6e3a; }
 
             /* Rating mapping: the values (G, PG-13, FSK 12...) are short, so don't stretch
                the input fields across the whole container — it just looks cluttered. */
@@ -94,7 +99,6 @@
                         <button is="emby-button" type="button" id="LoadDefaultsBtn" class="raised emby-button">
                             <span id="arc-load-defaults-label">Load Built-in Defaults</span>
                         </button>
-                        <button is="emby-button" type="button" id="AddRowBtn" class="raised emby-button">+ Add Row</button>
                         <button is="emby-button" type="button" id="SaveMappingsBtn" class="raised button-submit emby-button">Save Mappings</button>
                     </div>
                     <div id="arc-mappings-msg" class="arc-msg"></div>
@@ -106,6 +110,13 @@
                         <thead><tr><th>Source Rating</th><th>Target Rating</th><th></th></tr></thead>
                         <tbody id="MappingsBody"></tbody>
                     </table>
+                    <div class="arc-actions">
+                        <button is="emby-button" type="button" id="AddRowBtn" class="raised emby-button">+ Add Row</button>
+                    </div>
+                    <div id="UnmappedSection" style="display:none; margin-top:1em;">
+                        <div class="arc-card-title" style="font-size:0.85em;">Unmapped in library (<span id="UnmappedCount">0</span>)</div>
+                        <div id="UnmappedChips" class="arc-chip-row"></div>
+                    </div>
                 </div>
 
                 <!-- Load-defaults confirmation dialog -->
@@ -133,6 +144,11 @@
                 return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
             }
             function q(sel) { return document.querySelector(sel); }
+
+            // Target-rank lookup built from the configured DefaultTargetSystem's
+            // ordered rating list. Used to keep the mapping table grouped by target
+            // (softer ratings first) so it's easy to scan. Empty = no sort applied.
+            var targetRank = null;
 
             // ── Page load ────────────────────────────────────────────────────────
             q('#AgeRatingConfigPage').addEventListener('pageshow', function () {
@@ -164,11 +180,51 @@
                 Promise.all([systemsLoaded, configLoaded]).then(function (results) {
                     var config = results[1];
                     q('#DefaultTargetSystem').value = config.DefaultTargetSystem || '';
-                    renderMappingsTable(config.MappingTableJson);
                     updateLoadDefaultsLabel();
-                    Dashboard.hideLoadingMsg();
+
+                    var rankLoaded = loadTargetRank(config.DefaultTargetSystem || '');
+                    rankLoaded.then(function () {
+                        renderMappingsTable(config.MappingTableJson);
+                        Dashboard.hideLoadingMsg();
+                    });
                 });
+
+                fetchUnmapped();
             });
+
+            // Fetches the ordered list of primary ratings for the configured target
+            // system and builds `targetRank` so rows can be sorted softer-first.
+            // If the system is empty or the fetch fails, leaves targetRank null
+            // so the table render preserves stored order.
+            function loadTargetRank(systemId) {
+                targetRank = null;
+                if (!systemId) {
+                    return Promise.resolve();
+                }
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/SystemRatings?system=' + encodeURIComponent(systemId)),
+                    dataType: 'json'
+                }).then(function (ratings) {
+                    if (!ratings || !ratings.length) return;
+                    var map = {};
+                    for (var i = 0; i < ratings.length; i++) {
+                        var key = String(ratings[i]).toLowerCase();
+                        if (!(key in map)) {
+                            map[key] = i;
+                        }
+                    }
+                    targetRank = map;
+                }).catch(function () {
+                    targetRank = null;
+                });
+            }
+
+            function rankFor(rating) {
+                if (!targetRank) return Number.MAX_SAFE_INTEGER;
+                var key = String(rating || '').toLowerCase();
+                return (key in targetRank) ? targetRank[key] : Number.MAX_SAFE_INTEGER;
+            }
 
             q('#DefaultTargetSystem').addEventListener('change', function () {
                 // Reflect the new choice on the button immediately; it doesn't persist
@@ -198,17 +254,42 @@
                 }
                 var tbody = q('#MappingsBody');
                 tbody.innerHTML = '';
-                (rows || []).forEach(function (m) {
-                    addMappingRow(m.source || m.Source || '', m.target || m.Target || '');
+
+                var normalised = (rows || []).map(function (m) {
+                    return {
+                        source: m.source || m.Source || '',
+                        target: m.target || m.Target || '',
+                        isManual: !!(m.IsManual || m.isManual)
+                    };
+                });
+
+                // Sort by target rank (softer first, unknown to the end), then by
+                // source alphabetically. When no target system is configured the
+                // rank map is null and every row falls back to MAX_SAFE_INTEGER,
+                // making the sort stable-by-source.
+                if (targetRank) {
+                    normalised.sort(function (a, b) {
+                        var ra = rankFor(a.target);
+                        var rb = rankFor(b.target);
+                        if (ra !== rb) return ra - rb;
+                        return String(a.source).localeCompare(String(b.source), undefined, { sensitivity: 'base' });
+                    });
+                }
+
+                normalised.forEach(function (m) {
+                    addMappingRow(m.source, m.target, m.isManual);
                 });
                 updateEmptyNotice();
             }
 
-            function addMappingRow(src, tgt) {
+            function addMappingRow(src, tgt, isManual) {
                 var tbody = q('#MappingsBody');
                 var tr = document.createElement('tr');
+                tr.dataset.manual = isManual ? '1' : '0';
+                var markClass = isManual ? 'arc-manual-mark' : 'arc-manual-mark arc-manual-hidden';
+                var markTitle = isManual ? ' title="Manually added"' : ' aria-hidden="true"';
                 tr.innerHTML =
-                    '<td><input type="text" class="arc-src" value="' + esc(src) + '" /></td>' +
+                    '<td><span class="' + markClass + '"' + markTitle + '>✎</span><input type="text" class="arc-src" value="' + esc(src) + '" /></td>' +
                     '<td><input type="text" class="arc-tgt" value="' + esc(tgt) + '" /></td>' +
                     '<td><button class="del-btn" title="Remove">✕</button></td>';
                 tr.querySelector('.del-btn').addEventListener('click', function () {
@@ -217,6 +298,7 @@
                 });
                 tbody.appendChild(tr);
                 updateEmptyNotice();
+                return tr;
             }
 
             function rowCount() {
@@ -248,7 +330,16 @@
                 }
             }
 
-            q('#AddRowBtn').addEventListener('click', function () { addMappingRow('', ''); });
+            q('#AddRowBtn').addEventListener('click', function () {
+                var tr = addMappingRow('', '', true);
+                if (tr) {
+                    var input = tr.querySelector('.arc-src');
+                    if (input) {
+                        tr.scrollIntoView({ block: 'nearest' });
+                        input.focus();
+                    }
+                }
+            });
 
             // ── Load Defaults (with confirmation) ───────────────────────────────
             q('#LoadDefaultsBtn').addEventListener('click', function () {
@@ -286,7 +377,7 @@
                 }).then(function (defaults) {
                     q('#MappingsBody').innerHTML = '';
                     (defaults || []).forEach(function (m) {
-                        addMappingRow(m.Source || '', m.Target || '');
+                        addMappingRow(m.Source || '', m.Target || '', false);
                     });
                     msg.textContent = 'Loaded ' + (defaults || []).length + ' default(s) for ' + target + '. Click Save Mappings to persist.';
                 }).catch(function () {
@@ -300,7 +391,8 @@
                 var rows = Array.from(document.querySelectorAll('#MappingsBody tr')).map(function (tr) {
                     return {
                         Source: tr.querySelector('.arc-src').value.trim(),
-                        Target: tr.querySelector('.arc-tgt').value.trim()
+                        Target: tr.querySelector('.arc-tgt').value.trim(),
+                        IsManual: tr.dataset.manual === '1'
                     };
                 }).filter(function (m) { return m.Source && m.Target; });
 
@@ -313,9 +405,65 @@
                     ApiClient.updatePluginConfiguration(PLUGIN_ID, config).then(function () {
                         msg.textContent = 'Saved ' + rows.length + ' mapping(s).';
                         setTimeout(function () { if (msg.textContent.startsWith('Saved ')) msg.textContent = ''; }, 2500);
+                        // Re-sort the just-saved rows and refresh the unmapped
+                        // worklist — rows the admin added may now be covered.
+                        renderMappingsTable(config.MappingTableJson);
+                        fetchUnmapped();
                     });
                 });
             });
+
+            // ── Unmapped-in-library chips ──────────────────────────────────────
+            function fetchUnmapped() {
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/UnmappedRatings'),
+                    dataType: 'json'
+                }).then(function (entries) {
+                    renderUnmapped(entries || []);
+                }).catch(function () {
+                    renderUnmapped([]);
+                });
+            }
+
+            function renderUnmapped(entries) {
+                var section = q('#UnmappedSection');
+                var chips = q('#UnmappedChips');
+                var countEl = q('#UnmappedCount');
+                if (!section || !chips || !countEl) return;
+                chips.innerHTML = '';
+                if (!entries.length) {
+                    section.style.display = 'none';
+                    countEl.textContent = '0';
+                    return;
+                }
+                section.style.display = '';
+                countEl.textContent = String(entries.length);
+                entries.forEach(function (e) {
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'arc-unmapped-chip';
+                    btn.dataset.rating = e.Rating;
+                    btn.textContent = '+ ' + e.Rating + ' (' + e.Count + ')';
+                    btn.addEventListener('click', function () {
+                        var tr = addMappingRow(e.Rating, '', true);
+                        btn.remove();
+                        var n = Math.max(0, parseInt(countEl.textContent, 10) - 1);
+                        countEl.textContent = String(n);
+                        if (n === 0) {
+                            section.style.display = 'none';
+                        }
+                        if (tr) {
+                            var tgtInput = tr.querySelector('.arc-tgt');
+                            if (tgtInput) {
+                                tr.scrollIntoView({ block: 'nearest' });
+                                tgtInput.focus();
+                            }
+                        }
+                    });
+                    chips.appendChild(btn);
+                });
+            }
         })();
         </script>
     </div>

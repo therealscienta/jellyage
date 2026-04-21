@@ -68,7 +68,12 @@ public static class DefaultMappings
                 var pair = (sr.Rating, targetRating);
                 if (seen.Add(pair))
                 {
-                    result.Add(new RatingMapping { Source = sr.Rating, Target = targetRating });
+                    result.Add(new RatingMapping
+                    {
+                        Source = sr.Rating,
+                        Target = targetRating,
+                        IsManual = false,
+                    });
                 }
             }
         }

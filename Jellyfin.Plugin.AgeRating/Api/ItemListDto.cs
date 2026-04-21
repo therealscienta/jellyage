@@ -24,4 +24,7 @@ public class ItemListDto
 
     /// <summary>Gets or sets the total pending-conversion count across the whole library (filter-independent).</summary>
     public int PendingCount { get; set; }
+
+    /// <summary>Gets or sets the total count of items whose OfficialRating has no matching entry in the mapping table (filter-independent).</summary>
+    public int NoMappingCount { get; set; }
 }

@@ -23,14 +23,14 @@ mkdir -p "$MEDIA" 2>/dev/null || true
 # owned by root. Reclaim the tree so the rest of the script can write normally.
 if [ -d "$MEDIA" ] && [ ! -w "$MEDIA" ]; then
   echo "==> Reclaiming media directory ownership..."
-  docker run --rm -v "$MEDIA":/m alpine:3.20 sh -c "chown -R $(id -u):$(id -g) /m"
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$MEDIA":/m alpine:3.20 sh -c "chown -R $(id -u):$(id -g) /m"
 fi
 
 # ── 1. Seed video (re-used for every item) ────────────────────────────────
 SEED="$MEDIA/_seed.mkv"
 if [ ! -f "$SEED" ]; then
   echo "==> Generating seed video with ffmpeg..."
-  docker run --rm -v "$MEDIA":/work -w /work jrottenberg/ffmpeg:7.1-alpine \
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$MEDIA":/work -w /work jrottenberg/ffmpeg:7.1-alpine \
     -hide_banner -loglevel error \
     -f lavfi -i "testsrc2=duration=3:size=320x240:rate=15" \
     -f lavfi -i "sine=frequency=440:duration=3" \
@@ -43,7 +43,7 @@ fi
 # Delete via a throwaway alpine container so we don't hit permission errors.
 if [ -d "$MOVIES" ] || [ -d "$SHOWS" ]; then
   echo "==> Wiping previous mock content..."
-  docker run --rm -v "$MEDIA":/m alpine:3.20 sh -c 'rm -rf /m/Movies /m/Shows'
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$MEDIA":/m alpine:3.20 sh -c 'rm -rf /m/Movies /m/Shows'
 fi
 mkdir -p "$MOVIES" "$SHOWS"
 
@@ -83,7 +83,7 @@ for fname in "${!NAMED[@]}"; do
   dir="$MOVIES/$fname"
   mkdir -p "$dir"
   cp -f "$SEED" "$dir/$fname.mkv"
-  year=$(echo "$fname" | grep -oP '\d{4}')
+  year=$(echo "$fname" | grep -oE '[0-9]{4}')
   clean=$(echo "$fname" | sed "s/ ($year)//")
   write_movie_nfo "$dir" "$clean" "$year" "${NAMED[$fname]}"
 done

@@ -198,10 +198,57 @@ public class RatingController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the OfficialRating values present in the library that have no
+    /// entry in the configured mapping table, grouped with their occurrence
+    /// count. Unrated values and blank OfficialRatings are excluded, matching
+    /// the skip rules in <see cref="RatingConversionTask"/>. Intended to seed
+    /// the config page's "Unmapped in library" worklist.
+    /// </summary>
+    /// <returns>Entries ordered by count descending, then rating ascending.</returns>
+    [HttpGet("UnmappedRatings")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<IReadOnlyList<UnmappedRatingEntryDto>> GetUnmappedRatings()
+    {
+        var unratedSet = GetUnratedSet();
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var lookup = RatingConversionTask.BuildLookup(config);
+
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in GetMovieAndSeriesItems())
+        {
+            var source = item.OfficialRating;
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                continue;
+            }
+
+            var key = source.Trim();
+            if (unratedSet.Contains(key))
+            {
+                continue;
+            }
+
+            if (lookup.ContainsKey(key))
+            {
+                continue;
+            }
+
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+
+        return Ok(counts
+            .Select(kv => new UnmappedRatingEntryDto { Rating = kv.Key, Count = kv.Value })
+            .OrderByDescending(x => x.Count)
+            .ThenBy(x => x.Rating, StringComparer.OrdinalIgnoreCase)
+            .ToList());
+    }
+
+    /// <summary>
     /// Unified paginated list of Movies and Series, optionally filtered by rating state,
     /// type, or name substring. Also returns global Unrated/Pending counts for badge display.
     /// </summary>
-    /// <param name="filter">One of "all", "unrated", "pending". Defaults to "all".</param>
+    /// <param name="filter">One of "all", "unrated", "pending", "nomapping". Defaults to "all".</param>
     /// <param name="type">One of "all", "Movie", "Series". Defaults to "all".</param>
     /// <param name="search">Case-insensitive name substring.</param>
     /// <param name="rating">Exact effective rating to filter by (case-insensitive). Empty = no filter.</param>
@@ -241,6 +288,7 @@ public class RatingController : ControllerBase
 
         var unratedCount = 0;
         var pendingCount = 0;
+        var noMappingCount = 0;
         var rows = new List<ItemRowDto>(all.Count);
         foreach (var item in all)
         {
@@ -269,6 +317,17 @@ public class RatingController : ControllerBase
                 }
             }
 
+            // Source ratings that are non-empty, not in the unrated set, and have
+            // no entry in the mapping table — this is what the "no mapping match"
+            // filter chip surfaces. Mirrors the skip order in RatingConversionTask.Run.
+            var hasNoMapping = false;
+            if (!string.IsNullOrWhiteSpace(source))
+            {
+                var sourceTrimmed = source.Trim();
+                hasNoMapping = !unratedSet.Contains(sourceTrimmed)
+                               && !lookup.ContainsKey(sourceTrimmed);
+            }
+
             if (isUnrated)
             {
                 unratedCount++;
@@ -277,6 +336,11 @@ public class RatingController : ControllerBase
             if (proposed is not null)
             {
                 pendingCount++;
+            }
+
+            if (hasNoMapping)
+            {
+                noMappingCount++;
             }
 
             rows.Add(new ItemRowDto
@@ -302,6 +366,24 @@ public class RatingController : ControllerBase
                 break;
             case "pending":
                 filtered = rows.Where(r => r.ProposedRating is not null);
+                break;
+            case "nomapping":
+                filtered = rows.Where(r =>
+                {
+                    var src = r.CurrentRating;
+                    if (string.IsNullOrWhiteSpace(src))
+                    {
+                        return false;
+                    }
+
+                    var trimmed = src.Trim();
+                    if (unratedSet.Contains(trimmed))
+                    {
+                        return false;
+                    }
+
+                    return !lookup.ContainsKey(trimmed);
+                });
                 break;
         }
 
@@ -339,6 +421,7 @@ public class RatingController : ControllerBase
             PageSize = clampedPageSize,
             UnratedCount = unratedCount,
             PendingCount = pendingCount,
+            NoMappingCount = noMappingCount,
         });
     }
 
