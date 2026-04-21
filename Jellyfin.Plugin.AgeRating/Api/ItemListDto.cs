@@ -34,4 +34,12 @@ public class ItemListDto
     /// <see cref="GlobalCountsDto"/>.
     /// </summary>
     public int PendingCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets the count of items whose OfficialRating has no entry in the mapping table,
+    /// within the current type and library scope, before the chip/search/rating filters narrow
+    /// the list. This backs the "No mapping match" chip's badge, so — like the two counts above —
+    /// it must predict what clicking that chip returns.
+    /// </summary>
+    public int NoMappingCount { get; set; }
 }

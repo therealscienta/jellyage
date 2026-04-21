@@ -272,12 +272,48 @@ public class RatingController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the OfficialRating values present in the library that have no
+    /// entry in the configured mapping table, grouped with their occurrence
+    /// count. Unrated values and blank OfficialRatings are excluded, matching
+    /// the skip rules in <see cref="RatingConversionTask"/>. Intended to seed
+    /// the config page's "Unmapped in library" worklist.
+    /// </summary>
+    /// <returns>Entries ordered by count descending, then rating ascending.</returns>
+    [HttpGet("UnmappedRatings")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<IReadOnlyList<UnmappedRatingEntryDto>> GetUnmappedRatings()
+    {
+        var unratedSet = GetUnratedSet();
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var lookup = RatingConversionTask.BuildLookup(config);
+
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in GetMovieAndSeriesItems())
+        {
+            if (!HasNoMapping(item.OfficialRating, lookup, unratedSet))
+            {
+                continue;
+            }
+
+            var key = item.OfficialRating!.Trim();
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+
+        return Ok(counts
+            .Select(kv => new UnmappedRatingEntryDto { Rating = kv.Key, Count = kv.Value })
+            .OrderByDescending(x => x.Count)
+            .ThenBy(x => x.Rating, StringComparer.OrdinalIgnoreCase)
+            .ToList());
+    }
+
+    /// <summary>
     /// Unified paginated list of Movies and Series, optionally filtered by rating state,
-    /// type, library, or name substring. Also returns Unrated/Pending counts for the
-    /// chip badges — scoped by type and library, but not by the chip/search/rating
+    /// type, library, or name substring. Also returns Unrated/Pending/NoMapping counts for
+    /// the chip badges — scoped by type and library, but not by the chip/search/rating
     /// filters, so each badge predicts what clicking that chip returns.
     /// </summary>
-    /// <param name="filter">One of "all", "unrated", "pending". Defaults to "all".</param>
+    /// <param name="filter">One of "all", "unrated", "pending", "nomapping". Defaults to "all".</param>
     /// <param name="type">One of "all", "Movie", "Series". Defaults to "all".</param>
     /// <param name="search">Case-insensitive name substring.</param>
     /// <param name="rating">Exact effective rating to filter by (case-insensitive). Empty = no filter.</param>
@@ -326,12 +362,18 @@ public class RatingController : ControllerBase
 
         var unratedCount = 0;
         var pendingCount = 0;
+        var noMappingCount = 0;
         var rows = new List<ItemRowDto>(all.Count);
         foreach (var item in all)
         {
             var source = item.OfficialRating;
             var custom = item.CustomRating;
             var proposed = ComputeProposedRating(item, lookup, overwriteExisting: false);
+
+            if (HasNoMapping(source, lookup, unratedSet))
+            {
+                noMappingCount++;
+            }
 
             if (IsUnrated(custom, source, unratedSet))
             {
@@ -366,6 +408,9 @@ public class RatingController : ControllerBase
                 break;
             case "pending":
                 filtered = rows.Where(r => r.ProposedRating is not null);
+                break;
+            case "nomapping":
+                filtered = rows.Where(r => HasNoMapping(r.CurrentRating, lookup, unratedSet));
                 break;
         }
 
@@ -403,6 +448,7 @@ public class RatingController : ControllerBase
             PageSize = clampedPageSize,
             UnratedCount = unratedCount,
             PendingCount = pendingCount,
+            NoMappingCount = noMappingCount,
         });
     }
 
@@ -633,6 +679,27 @@ public class RatingController : ControllerBase
         }
 
         return target;
+    }
+
+    /// <summary>
+    /// Determines whether an item's source rating is real but absent from the mapping table —
+    /// what the "No mapping match" chip and the config page's unmapped worklist both surface.
+    /// A blank or unrated-value source is excluded: those are not missing a mapping, they have
+    /// nothing to map. Mirrors the skip order in RatingConversionTask.
+    /// </summary>
+    /// <param name="officialRating">The item's OfficialRating.</param>
+    /// <param name="lookup">Source-to-target rating lookup.</param>
+    /// <param name="unratedSet">Values configured to count as "no rating".</param>
+    /// <returns>True when the source rating has no mapping row.</returns>
+    private static bool HasNoMapping(string? officialRating, Dictionary<string, string> lookup, HashSet<string> unratedSet)
+    {
+        if (string.IsNullOrWhiteSpace(officialRating))
+        {
+            return false;
+        }
+
+        var trimmed = officialRating.Trim();
+        return !unratedSet.Contains(trimmed) && !lookup.ContainsKey(trimmed);
     }
 
     /// <summary>
