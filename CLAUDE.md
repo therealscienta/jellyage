@@ -48,7 +48,7 @@ Follow the patterns already established in the existing files rather than introd
 | `Jellyfin.Plugin.AgeRating/Configuration/PluginConfiguration.cs` | Persisted settings: `EnableAutoConversion`, `OverwriteExistingRatings`, `UnratedValues`, `MappingTableJson`, `DefaultTargetSystem`. |
 | `Jellyfin.Plugin.AgeRating/Configuration/RatingMapping.cs` | Plain `{ Source, Target }` record used inside `MappingTableJson`. |
 | `Jellyfin.Plugin.AgeRating/Configuration/configPage.html` | Config surface (Dashboard → Plugins → Age Rating Converter). Target-system dropdown, unrated-values input, mapping-table editor with confirmation dialog. |
-| `Jellyfin.Plugin.AgeRating/Configuration/mainPage.html` | Primary surface (Dashboard → Age Ratings). Automation card (pending count, toggles, Run Now, active-system banner, NFO persistence status card), paginated searchable item list, filter chips, rating/type dropdowns, multi-select bulk-edit bar. Item titles are clickable links to the Jellyfin detail page. |
+| `Jellyfin.Plugin.AgeRating/Configuration/mainPage.html` | Primary surface (Dashboard → Age Ratings). Automation card (pending count, toggles, Run Now, active-system banner, NFO persistence status card), paginated searchable item list, filter chips, library/type/rating dropdowns, multi-select bulk-edit bar. Item titles are clickable links to the Jellyfin detail page. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/AgeBucket.cs` | 8-value age-tier enum (All / Mild / Family / Teen / Mature / Adult / Restricted / NotRated) — the pivot between otherwise-incompatible rating systems. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/SystemRating.cs` | Record `(Rating, Bucket)`. |
 | `Jellyfin.Plugin.AgeRating/RatingMappings/SystemDescriptor.cs` | Record `(Id, DisplayName, ExampleRating)` — what `/SupportedSystems` returns. |
@@ -59,6 +59,8 @@ Follow the patterns already established in the existing files rather than introd
 | `Jellyfin.Plugin.AgeRating/Api/ItemListDto.cs`, `ItemRowDto.cs`, `BulkSetRatingRequestDto.cs`, `BulkSetRatingResponseDto.cs`, `RatingPreviewDto.cs` | API DTOs. |
 | `Jellyfin.Plugin.AgeRating/Api/LibraryPersistenceDto.cs` | Response shape for `GET /AgeRating/LibraryPersistence` — per-library NFO saver status. |
 | `Jellyfin.Plugin.AgeRating/Api/RatingSummaryEntryDto.cs` | Response shape for `GET /AgeRating/RatingSummary` — effective-rating / count pair. |
+| `Jellyfin.Plugin.AgeRating/Api/LibraryChoiceDto.cs` | Response shape for `GET /AgeRating/Libraries` — id/name pair backing the main page's library filter. |
+| `Jellyfin.Plugin.AgeRating/Api/GlobalCountsDto.cs` | Response shape for `GET /AgeRating/Counts` — server-wide unrated/pending counts for the Automation card. |
 | `build.yaml` | Plugin metadata for the build/packaging pipeline. Must stay in sync with `Plugin.cs`'s GUID, the assembly version, and `targetAbi`. |
 | `manifest.json` | Jellyfin plugin-repository manifest served over HTTP (see Releasing). |
 
@@ -90,12 +92,14 @@ All endpoints require the `RequiresElevation` authorisation policy.
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&rating=&page=&pageSize=` | Paginated `ItemListDto` with `Items`, `TotalCount`, `Page`, `PageSize`, `UnratedCount`, `PendingCount`. Server-side filter + search + exact effective-rating filter. |
+| `GET /AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&rating=&libraryId=&page=&pageSize=` | Paginated `ItemListDto` with `Items`, `TotalCount`, `Page`, `PageSize`, `UnratedCount`, `PendingCount`. Server-side filter + search + exact effective-rating filter. `libraryId` scopes the query via `InternalItemsQuery.AncestorIds`; 400 on a malformed Guid. `UnratedCount`/`PendingCount` are scoped by `type` and `libraryId` (but *not* by `filter`/`search`/`rating`) so each chip badge predicts what clicking it returns — for the server-wide figures see `/Counts`. |
 | `GET /AgeRating/SupportedSystems` | `IReadOnlyList<SystemDescriptor>` — 17 systems with `Id`, `DisplayName`, `ExampleRating`. |
 | `GET /AgeRating/DefaultMappings?target={id}` | `IReadOnlyList<RatingMapping>` generated for the given target. 400 on unknown/missing target. |
 | `GET /AgeRating/SystemRatings?system={id}` | `IReadOnlyList<string>` — ordered primary ratings for the given system (duplicates removed). Used to populate the active-system banner. |
-| `GET /AgeRating/RatingSummary` | `IReadOnlyList<RatingSummaryEntryDto>` — effective-rating / count pairs for all Movies and Series (CustomRating preferred). Used to populate the rating filter dropdown. |
+| `GET /AgeRating/RatingSummary?libraryId=` | `IReadOnlyList<RatingSummaryEntryDto>` — effective-rating / count pairs for Movies and Series (CustomRating preferred). Used to populate the rating filter dropdown; `libraryId` scopes the counts to one library so the dropdown can't offer a rating that yields zero rows. Still ignores `type`. |
 | `GET /AgeRating/LibraryPersistence` | `IReadOnlyList<LibraryPersistenceDto>` — per-library NFO saver status for Movie/TV/Mixed libraries. `PersistsToDisk = NfoSaverEnabled && SaveLocalMetadata`. |
+| `GET /AgeRating/Libraries` | `IReadOnlyList<LibraryChoiceDto>` — Movie/TV/Mixed libraries with a resolved `ItemId`, ordered by name. Populates the main page's library filter. |
+| `GET /AgeRating/Counts` | `GlobalCountsDto` — server-wide `UnratedCount`/`PendingCount`, ignoring every list filter. Backs the Automation card, which sits next to Run Now (also global). |
 | `GET /AgeRating/Preview` | `IEnumerable<RatingPreviewDto>` — items whose next conversion run would actually change `CustomRating`. |
 | `POST /AgeRating/ApplyNow` | Runs `RatingConversionTask.Run()` inline; 200 when done. |
 | `POST /AgeRating/BulkSetRating` | Body `{ ItemIds, Rating }`; writes `Rating` to every listed item's `CustomRating` (empty string clears). Returns `{ UpdatedCount }`. |
@@ -109,6 +113,12 @@ Two Jellyfin-specific constraints to keep in mind:
 - **API responses are PascalCase** (e.g. `ItemId`, not `itemId`). `ApiClient.ajax({ ..., dataType: 'json' })` is required to get parsed JSON; without `dataType` you get a `Response` object.
 
 Both pages use the Emby UI component system (`is="emby-button"`, `is="emby-input"`, `is="emby-checkbox"`, `is="emby-select"`) and communicate with the server via `ApiClient.getPluginConfiguration()`, `ApiClient.updatePluginConfiguration()`, and `ApiClient.ajax()`. Navigation and all interaction is plain JavaScript — no framework, no build step.
+
+Three `mainPage.html` patterns that are load-bearing:
+
+- **Two count scopes, deliberately.** The chip badges (`Unrated (n)` / `Has pending change (n)`) come from `/Items` and are **scoped** by type + library, because a badge must predict what clicking that chip shows. The Automation card's pending sentence comes from `/Counts` and is **global**, because it sits beside Run Now, which always converts every library. Never feed one from the other. `/Counts` is refreshed on page show and after mutations (Run Now, bulk apply, config toggle) — never on a filter change.
+- **`refreshItems()` uses a request-sequence token**, not an in-flight flag: `var seq = ++state.requestSeq;` and both the `.then` and `.catch` bail when `seq !== state.requestSeq`. This stops a slow earlier response painting over a newer one, which otherwise leaves the wrong library's rows on screen.
+- **The library dropdown reloads the rating dropdown before refetching items** (`loadRatingSummary().then(refreshItems)`), because rating counts are library-scoped. `loadRatingSummary()` syncs `state.ratingFilter` to the select after rebuilding it, so a rating that doesn't exist in the newly chosen library can't linger in state while the UI shows it as cleared.
 
 ## Releasing
 

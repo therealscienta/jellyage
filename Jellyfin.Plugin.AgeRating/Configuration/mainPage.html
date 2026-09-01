@@ -108,12 +108,20 @@
             .arc-system-info .arc-system-name { color: #ccc; font-weight: 600; }
             .arc-system-info .arc-system-ratings { color: #00a4dc; }
             .arc-rating-select { padding: 6px 10px; }
-            .arc-filter-group { display: inline-flex; gap: 0.6em; align-items: center; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
+            .arc-library-select { padding: 6px 10px; }
+            /* Three selects no longer fit beside the search box and chips at typical
+               dashboard widths, so the group is allowed to shrink and to wrap
+               internally rather than overflowing or crushing the search input. */
+            .arc-filter-group { display: inline-flex; gap: 0.6em; align-items: center; flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; min-width: 0; }
             .arc-filter-group > select,
-            .arc-filter-group [is="emby-select"] { flex: 0 1 170px; width: 170px; min-width: 120px; max-width: 200px; padding: 6px 10px; }
+            .arc-filter-group [is="emby-select"] { flex: 1 1 150px; width: auto; min-width: 130px; max-width: 200px; padding: 6px 10px; }
             .arc-filters { row-gap: 0.5em; }
-            @media (max-width: 720px) {
-                .arc-filter-group { flex-basis: 100%; margin-left: 0; }
+            @media (max-width: 1100px) {
+                .arc-filter-group { flex-basis: 100%; margin-left: 0; justify-content: flex-start; }
+            }
+            @media (max-width: 560px) {
+                .arc-filter-group > select,
+                .arc-filter-group [is="emby-select"] { flex: 1 1 100%; max-width: none; }
             }
             .arc-title-link { color: inherit; text-decoration: none; }
             .arc-title-link:hover { color: #00a4dc; text-decoration: underline; }
@@ -180,6 +188,9 @@
                         <button class="arc-chip" data-filter="unrated">Unrated <span id="arc-unrated-badge"></span></button>
                         <button class="arc-chip" data-filter="pending">Has pending change <span id="arc-pending-badge"></span></button>
                         <div class="arc-filter-group">
+                            <select id="arc-library-select" is="emby-select" class="arc-library-select">
+                                <option value="">All libraries</option>
+                            </select>
                             <select id="arc-type-select" is="emby-select" class="arc-type-select">
                                 <option value="all">All types</option>
                                 <option value="Movie">Movies</option>
@@ -245,11 +256,12 @@
                 type: 'all',       // all | Movie | Series
                 search: '',
                 ratingFilter: '',  // exact effective rating to filter by, '' = none
+                libraryId: '',     // virtual-folder id to scope the list to, '' = all libraries
                 page: 1,
                 totalCount: 0,
                 selected: new Set(), // item IDs selected on the CURRENT page
                 searchDebounce: null,
-                isLoading: false,
+                requestSeq: 0,     // monotonic token; only the newest items response may render
                 targetSystem: '',      // config DefaultTargetSystem, e.g. "BBFC"
                 targetExample: '',     // representative rating, e.g. "12A"
                 persistence: null,     // array of LibraryPersistenceDto, null until loaded
@@ -269,6 +281,8 @@
             q('#AgeRatingsMainPage').addEventListener('pageshow', function () {
                 loadConfig();
                 loadLibraryPersistence();
+                loadLibraries();
+                loadGlobalCounts();
                 refreshItems();
             });
 
@@ -422,10 +436,14 @@
                 }
             }
 
+            // Counts are library-scoped, so this is re-run whenever the library changes.
+            // Always returns a resolved promise so callers can chain refreshItems().
             function loadRatingSummary() {
-                ApiClient.ajax({
+                var url = 'AgeRating/RatingSummary';
+                if (state.libraryId) url += '?libraryId=' + encodeURIComponent(state.libraryId);
+                return ApiClient.ajax({
                     type: 'GET',
-                    url: ApiClient.getUrl('AgeRating/RatingSummary'),
+                    url: ApiClient.getUrl(url),
                     dataType: 'json'
                 }).then(function (entries) {
                     var sel = q('#arc-rating-select');
@@ -441,7 +459,61 @@
                     // restore selection if the value still exists
                     sel.value = current;
                     if (sel.value !== current) sel.value = '';
+                    // The rating may not exist in the newly selected library. Keep state in
+                    // step with the select, or the next fetch sends a stale rating filter
+                    // that the UI shows as cleared.
+                    state.ratingFilter = sel.value;
                 }).catch(function () {});
+            }
+
+            // Libraries offered by the filter dropdown. Independent of the persistence
+            // card so one failing doesn't silently break the other.
+            function loadLibraries() {
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/Libraries'),
+                    dataType: 'json'
+                }).then(function (libs) {
+                    var sel = q('#arc-library-select');
+                    var current = sel.value;
+                    // keep the first "All libraries" option, rebuild the rest
+                    while (sel.options.length > 1) sel.remove(1);
+                    (libs || []).forEach(function (l) {
+                        var opt = document.createElement('option');
+                        opt.value = l.ItemId;
+                        opt.textContent = l.Name;
+                        sel.appendChild(opt);
+                    });
+                    // restore selection if the library still exists, else fall back to All
+                    sel.value = current;
+                    if (sel.value !== current) sel.value = '';
+                    state.libraryId = sel.value;
+                    // A single-library server gains nothing from the control.
+                    sel.style.display = (libs || []).length > 1 ? '' : 'none';
+                }).catch(function () {
+                    // The list still works unfiltered; just hide a control we can't populate.
+                    state.libraryId = '';
+                    var sel = q('#arc-library-select');
+                    if (sel) { sel.value = ''; sel.style.display = 'none'; }
+                });
+            }
+
+            // Whole-server counts for the Automation card. Deliberately NOT refreshed on
+            // filter changes — these describe what Run Now would do, which is global.
+            function loadGlobalCounts() {
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('AgeRating/Counts'),
+                    dataType: 'json'
+                }).then(function (counts) {
+                    if (!counts) return;
+                    state.lastPendingCount = counts.PendingCount;
+                    renderPendingDisplay(counts.UnratedCount, counts.PendingCount);
+                    maybeAutoExpandPersistence();
+                }).catch(function () {
+                    // Don't leave the card stuck on "Loading…" forever.
+                    q('#arc-pending-display').textContent = 'Could not load conversion status. Check server logs.';
+                });
             }
 
             // Update UI elements that reflect the chosen target system.
@@ -461,6 +533,7 @@
                         setTimeout(function () { if (msg.textContent === 'Saved.') msg.textContent = ''; }, 1500);
                         // Pending count may have changed (Overwrite toggle affects counts)
                         refreshItems();
+                        loadGlobalCounts();
                     }).catch(function () {
                         msg.className = 'arc-msg arc-err';
                         msg.textContent = 'Failed to save.';
@@ -485,6 +558,7 @@
                     setTimeout(function () { if (msg.textContent === 'Conversion complete.') msg.textContent = ''; }, 2000);
                     refreshItems();
                     loadRatingSummary();
+                    loadGlobalCounts();
                 }).catch(function () {
                     msg.className = 'arc-msg arc-err';
                     msg.textContent = 'Conversion failed. Check server logs.';
@@ -501,6 +575,17 @@
                     state.selected.clear();
                     refreshItems();
                 });
+            });
+
+            // ── Library select ──────────────────────────────────────────────────
+            q('#arc-library-select').addEventListener('change', function (e) {
+                state.libraryId = e.target.value;
+                state.page = 1;
+                state.selected.clear();
+                // Rating counts are library-scoped, so rebuild that dropdown first — it
+                // may clear a rating that doesn't exist in the newly chosen library.
+                // Chaining keeps this to a single item fetch with settled filters.
+                loadRatingSummary().then(refreshItems);
             });
 
             // ── Type select ─────────────────────────────────────────────────────
@@ -586,6 +671,7 @@
                     q('#arc-bulk-rating').value = '';
                     refreshItems();
                     loadRatingSummary();
+                    loadGlobalCounts();
                     setTimeout(function () { bulkMsg.textContent = ''; }, 2500);
                 }).catch(function () {
                     bulkMsg.className = 'arc-msg arc-err';
@@ -606,26 +692,26 @@
                 params.set('type', state.type);
                 if (state.search) params.set('search', state.search);
                 if (state.ratingFilter) params.set('rating', state.ratingFilter);
+                if (state.libraryId) params.set('libraryId', state.libraryId);
                 params.set('page', state.page);
                 params.set('pageSize', PAGE_SIZE);
                 return ApiClient.getUrl('AgeRating/Items?' + params.toString());
             }
 
             function refreshItems() {
-                if (state.isLoading) return;
-                state.isLoading = true;
+                // Sequence token rather than an in-flight flag: rapid filter changes must
+                // never be dropped, and a slow earlier response must never paint over a
+                // newer one (which would leave the wrong library's rows on screen).
+                var seq = ++state.requestSeq;
                 renderSkeleton();
-                ApiClient.ajax({ type: 'GET', url: buildItemsUrl(), dataType: 'json' }).then(function (data) {
+                return ApiClient.ajax({ type: 'GET', url: buildItemsUrl(), dataType: 'json' }).then(function (data) {
+                    if (seq !== state.requestSeq) return;
                     state.totalCount = data.TotalCount;
-                    state.lastPendingCount = data.PendingCount;
                     renderItems(data.Items);
                     renderBadges(data.UnratedCount, data.PendingCount);
                     renderPager();
-                    renderPendingDisplay(data.UnratedCount, data.PendingCount);
-                    maybeAutoExpandPersistence();
-                    state.isLoading = false;
                 }).catch(function () {
-                    state.isLoading = false;
+                    if (seq !== state.requestSeq) return;
                     q('#arc-items-body').innerHTML = '';
                     var empty = q('#arc-empty');
                     empty.style.display = '';
@@ -649,7 +735,9 @@
                 var empty = q('#arc-empty');
                 if (!items || items.length === 0) {
                     empty.style.display = '';
-                    empty.textContent = state.search || state.filter !== 'all' || state.type !== 'all'
+                    var scoped = state.search || state.filter !== 'all' || state.type !== 'all'
+                                 || state.ratingFilter || state.libraryId;
+                    empty.textContent = scoped
                         ? 'No items match this filter.'
                         : 'No Movies or Series in the library yet. Run a library scan first.';
                     q('#arc-select-all').checked = false;

@@ -123,20 +123,9 @@ public class RatingController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     public ActionResult<IReadOnlyList<LibraryPersistenceDto>> GetLibraryPersistence()
     {
-        // Only Movie/TV libraries are interesting here — that's what the conversion task touches.
-        // A null CollectionType represents a "Mixed" library (movies + shows) so it stays in too.
-        // Music/Books/BoxSets etc. still expose MetadataSavers but their presence would just clutter the UI.
         var result = new List<LibraryPersistenceDto>();
-        foreach (var vf in _libraryManager.GetVirtualFolders())
+        foreach (var vf in GetRelevantVirtualFolders())
         {
-            var ct = vf.CollectionType;
-            if (ct is not null
-                && ct != MediaBrowser.Model.Entities.CollectionTypeOptions.movies
-                && ct != MediaBrowser.Model.Entities.CollectionTypeOptions.tvshows)
-            {
-                continue;
-            }
-
             var options = vf.LibraryOptions;
             var savers = options?.MetadataSavers ?? Array.Empty<string>();
             var nfoEnabled = Array.Exists(savers, s => string.Equals(s, "Nfo", StringComparison.OrdinalIgnoreCase));
@@ -163,18 +152,92 @@ public class RatingController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the Movie/TV/Mixed libraries the item list can be filtered to.
+    /// Libraries whose virtual folder has no resolved item id are omitted — they
+    /// cannot be used as a filter value.
+    /// </summary>
+    /// <returns>One entry per selectable library, ordered by name.</returns>
+    [HttpGet("Libraries")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<IReadOnlyList<LibraryChoiceDto>> GetLibraries()
+    {
+        var result = new List<LibraryChoiceDto>();
+        foreach (var vf in GetRelevantVirtualFolders())
+        {
+            // An empty id would collide with the "All libraries" sentinel and produce
+            // an option that silently means "no filter".
+            if (string.IsNullOrWhiteSpace(vf.ItemId))
+            {
+                continue;
+            }
+
+            result.Add(new LibraryChoiceDto
+            {
+                ItemId = vf.ItemId,
+                Name = vf.Name ?? string.Empty,
+            });
+        }
+
+        return Ok(result
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList());
+    }
+
+    /// <summary>
+    /// Returns server-wide unrated and pending-conversion counts, deliberately ignoring
+    /// every list filter. The main page's Automation card shows these next to "Run Now",
+    /// which always converts across all libraries — so scoping them to the current
+    /// library or type would misreport what that button is about to do.
+    /// </summary>
+    /// <returns>Whole-server counts.</returns>
+    [HttpGet("Counts")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<GlobalCountsDto> GetCounts()
+    {
+        var unratedSet = GetUnratedSet();
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var lookup = RatingConversionTask.BuildLookup(config);
+
+        var unrated = 0;
+        var pending = 0;
+        foreach (var item in GetMovieAndSeriesItems())
+        {
+            if (IsUnrated(item.CustomRating, item.OfficialRating, unratedSet))
+            {
+                unrated++;
+            }
+
+            if (ComputeProposedRating(item, lookup, config) is not null)
+            {
+                pending++;
+            }
+        }
+
+        return Ok(new GlobalCountsDto { UnratedCount = unrated, PendingCount = pending });
+    }
+
+    /// <summary>
     /// Returns the count of library items grouped by their effective rating
     /// (CustomRating preferred over OfficialRating). Items with no effective rating
     /// or an unrated-value are excluded — they are already surfaced by the Unrated filter.
     /// </summary>
+    /// <param name="libraryId">Virtual-folder (library) id to restrict counting to. Empty = all libraries.</param>
     /// <returns>Rating/Count pairs sorted alphabetically by rating.</returns>
     [HttpGet("RatingSummary")]
     [Authorize(Policy = "RequiresElevation")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public ActionResult<IReadOnlyList<RatingSummaryEntryDto>> GetRatingSummary()
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public ActionResult<IReadOnlyList<RatingSummaryEntryDto>> GetRatingSummary([FromQuery] string? libraryId = null)
     {
+        if (!TryParseLibraryId(libraryId, out var ancestorIds))
+        {
+            return BadRequest($"Invalid libraryId: '{libraryId}'.");
+        }
+
         var unratedSet = GetUnratedSet();
-        var items = GetMovieAndSeriesItems();
+        var items = GetMovieAndSeriesItems(ancestorIds);
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var item in items)
@@ -199,28 +262,38 @@ public class RatingController : ControllerBase
 
     /// <summary>
     /// Unified paginated list of Movies and Series, optionally filtered by rating state,
-    /// type, or name substring. Also returns global Unrated/Pending counts for badge display.
+    /// type, library, or name substring. Also returns Unrated/Pending counts for the
+    /// chip badges — scoped by type and library, but not by the chip/search/rating
+    /// filters, so each badge predicts what clicking that chip returns.
     /// </summary>
     /// <param name="filter">One of "all", "unrated", "pending". Defaults to "all".</param>
     /// <param name="type">One of "all", "Movie", "Series". Defaults to "all".</param>
     /// <param name="search">Case-insensitive name substring.</param>
     /// <param name="rating">Exact effective rating to filter by (case-insensitive). Empty = no filter.</param>
+    /// <param name="libraryId">Virtual-folder (library) id to restrict results to. Empty = all libraries.</param>
     /// <param name="page">1-based page number.</param>
     /// <param name="pageSize">Items per page (clamped to [1, 500]).</param>
     /// <returns>A paginated item list with aggregate counts.</returns>
     [HttpGet("Items")]
     [Authorize(Policy = "RequiresElevation")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public ActionResult<ItemListDto> GetItems(
         [FromQuery] string? filter = "all",
         [FromQuery] string? type = "all",
         [FromQuery] string? search = null,
         [FromQuery] string? rating = null,
+        [FromQuery] string? libraryId = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = DefaultPageSize)
     {
         var clampedPageSize = Math.Clamp(pageSize, 1, MaxPageSize);
         var clampedPage = Math.Max(1, page);
+
+        if (!TryParseLibraryId(libraryId, out var ancestorIds))
+        {
+            return BadRequest($"Invalid libraryId: '{libraryId}'.");
+        }
 
         var unratedSet = GetUnratedSet();
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
@@ -237,6 +310,7 @@ public class RatingController : ControllerBase
         {
             IncludeItemTypes = kinds,
             IsVirtualItem = false,
+            AncestorIds = ancestorIds,
         });
 
         var unratedCount = 0;
@@ -246,30 +320,9 @@ public class RatingController : ControllerBase
         {
             var source = item.OfficialRating;
             var custom = item.CustomRating;
+            var proposed = ComputeProposedRating(item, lookup, config);
 
-            // "Unrated" in the UI means the item has no *effective* rating —
-            // Jellyfin prefers CustomRating over OfficialRating at parental-
-            // check time, so we mirror that precedence here.
-            var effective = !string.IsNullOrWhiteSpace(custom) ? custom : source;
-            var isUnrated = string.IsNullOrWhiteSpace(effective)
-                            || unratedSet.Contains(effective!.Trim());
-
-            string? proposed = null;
-            if (!string.IsNullOrWhiteSpace(source)
-                && lookup.TryGetValue(source.Trim(), out var target))
-            {
-                // Match RatingConversionTask.Run's skip logic so the Preview / Pending
-                // badge reflects what the next run would actually change.
-                var wouldSkipDueToOverwrite = !config.OverwriteExistingRatings
-                                              && !string.IsNullOrWhiteSpace(custom);
-                var alreadyMatches = string.Equals(custom, target, StringComparison.OrdinalIgnoreCase);
-                if (!wouldSkipDueToOverwrite && !alreadyMatches)
-                {
-                    proposed = target;
-                }
-            }
-
-            if (isUnrated)
+            if (IsUnrated(custom, source, unratedSet))
             {
                 unratedCount++;
             }
@@ -397,24 +450,8 @@ public class RatingController : ControllerBase
         var previews = GetMovieAndSeriesItems()
             .Select(i =>
             {
-                var source = i.OfficialRating;
-                var custom = i.CustomRating;
-                if (string.IsNullOrWhiteSpace(source))
-                {
-                    return null;
-                }
-
-                if (!lookup.TryGetValue(source.Trim(), out var target))
-                {
-                    return null;
-                }
-
-                if (!config.OverwriteExistingRatings && !string.IsNullOrWhiteSpace(custom))
-                {
-                    return null;
-                }
-
-                if (string.Equals(custom, target, StringComparison.OrdinalIgnoreCase))
+                var target = ComputeProposedRating(i, lookup, config);
+                if (target is null)
                 {
                     return null;
                 }
@@ -424,7 +461,7 @@ public class RatingController : ControllerBase
                     ItemId = i.Id,
                     Name = i.Name,
                     Type = i is MediaBrowser.Controller.Entities.TV.Series ? "Series" : "Movie",
-                    CurrentRating = source,
+                    CurrentRating = i.OfficialRating,
                     ProposedRating = target,
                 };
             })
@@ -449,16 +486,127 @@ public class RatingController : ControllerBase
             return StatusCode(StatusCodes.Status503ServiceUnavailable);
         }
 
-        await task.Run(new Progress<double>(), cancellationToken).ConfigureAwait(false);
+        await task.RunManual(new Progress<double>(), cancellationToken).ConfigureAwait(false);
         return Ok();
     }
 
-    private IReadOnlyList<BaseItem> GetMovieAndSeriesItems()
+    private IReadOnlyList<BaseItem> GetMovieAndSeriesItems(Guid[]? ancestorIds = null)
         => _libraryManager.GetItemList(new InternalItemsQuery
         {
             IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
             IsVirtualItem = false,
+            AncestorIds = ancestorIds ?? [],
         });
+
+    /// <summary>
+    /// Enumerates the virtual folders (libraries) this plugin cares about: Movie, TV and
+    /// Mixed libraries. A null CollectionType represents a "Mixed" library (movies + shows)
+    /// so it stays in. Music/Books/BoxSets etc. still expose MetadataSavers, but the
+    /// conversion task never touches them and their presence would just clutter the UI.
+    /// </summary>
+    /// <returns>The relevant virtual folders, in Jellyfin's own order.</returns>
+    private List<MediaBrowser.Model.Entities.VirtualFolderInfo> GetRelevantVirtualFolders()
+    {
+        var result = new List<MediaBrowser.Model.Entities.VirtualFolderInfo>();
+        foreach (var vf in _libraryManager.GetVirtualFolders())
+        {
+            var ct = vf.CollectionType;
+            if (ct is not null
+                && ct != MediaBrowser.Model.Entities.CollectionTypeOptions.movies
+                && ct != MediaBrowser.Model.Entities.CollectionTypeOptions.tvshows)
+            {
+                continue;
+            }
+
+            result.Add(vf);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Parses the optional libraryId query parameter into the AncestorIds filter for
+    /// <see cref="InternalItemsQuery"/>. A library's CollectionFolder is an ancestor of
+    /// every Movie and Series inside it, so this scopes a query to one library.
+    /// Empty/whitespace and Guid.Empty both mean "no library filter" and yield an empty
+    /// array, which the repository treats as a no-op.
+    /// </summary>
+    /// <param name="libraryId">Raw query value; may be null.</param>
+    /// <param name="ancestorIds">The resulting ancestor filter.</param>
+    /// <returns>False when a value was supplied but is not a valid Guid.</returns>
+    private static bool TryParseLibraryId(string? libraryId, out Guid[] ancestorIds)
+    {
+        ancestorIds = [];
+        if (string.IsNullOrWhiteSpace(libraryId))
+        {
+            return true;
+        }
+
+        if (!Guid.TryParse(libraryId, out var parsed))
+        {
+            return false;
+        }
+
+        // An all-zero id would otherwise silently return an empty table, which is a
+        // worse failure than simply ignoring it.
+        if (!parsed.Equals(Guid.Empty))
+        {
+            ancestorIds = [parsed];
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Decides what the next conversion run would write to this item's CustomRating,
+    /// or null when it would leave the item alone. Mirrors the skip logic in
+    /// RatingConversionTask.Run so the Pending badge and Preview can't drift from it.
+    /// </summary>
+    /// <param name="item">The library item.</param>
+    /// <param name="lookup">Source-to-target rating lookup.</param>
+    /// <param name="config">Current plugin configuration.</param>
+    /// <returns>The target rating, or null if nothing would change.</returns>
+    private static string? ComputeProposedRating(BaseItem item, Dictionary<string, string> lookup, PluginConfiguration config)
+    {
+        var source = item.OfficialRating;
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return null;
+        }
+
+        if (!lookup.TryGetValue(source.Trim(), out var target))
+        {
+            return null;
+        }
+
+        // Respect a hand-curated override unless the user opted in to overwrite.
+        if (!config.OverwriteExistingRatings && !string.IsNullOrWhiteSpace(item.CustomRating))
+        {
+            return null;
+        }
+
+        // Idempotency: nothing to do if CustomRating already matches.
+        if (string.Equals(item.CustomRating, target, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return target;
+    }
+
+    /// <summary>
+    /// Determines whether an item has no *effective* rating. Jellyfin prefers CustomRating
+    /// over OfficialRating at parental-check time, so this mirrors that precedence.
+    /// </summary>
+    /// <param name="custom">The item's CustomRating.</param>
+    /// <param name="official">The item's OfficialRating.</param>
+    /// <param name="unratedSet">Values configured to count as "no rating".</param>
+    /// <returns>True when the item is effectively unrated.</returns>
+    private static bool IsUnrated(string? custom, string? official, HashSet<string> unratedSet)
+    {
+        var effective = !string.IsNullOrWhiteSpace(custom) ? custom : official;
+        return string.IsNullOrWhiteSpace(effective) || unratedSet.Contains(effective.Trim());
+    }
 
     private static HashSet<string> GetUnratedSet()
     {

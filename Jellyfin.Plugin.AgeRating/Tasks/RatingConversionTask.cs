@@ -43,6 +43,26 @@ public class RatingConversionTask : ILibraryPostScanTask
             return;
         }
 
+        await RunManual(progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs the conversion unconditionally, ignoring <see cref="PluginConfiguration.EnableAutoConversion"/>.
+    /// Used by the "Run Now" API action, which is deliberately independent of the
+    /// "Run after library scan" automation toggle — the two are separate controls.
+    /// </summary>
+    /// <param name="progress">Progress reporter.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task RunManual(IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config is null)
+        {
+            progress.Report(100);
+            return;
+        }
+
         var mappings = BuildLookup(config);
         if (mappings.Count == 0)
         {

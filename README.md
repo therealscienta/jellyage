@@ -23,6 +23,7 @@ The plugin writes to Jellyfin's **CustomRating** field rather than overwriting `
 - **17 rating systems** covered out of the box: MPAA, BBFC, FSK, CNC, PEGI, Kijkwijzer, Sweden, Norway, Denmark, Finland, Iceland, EIRIN, KMRB, ACB, HKCAT, OFLC-NZ, Russia. Add or override individual rows freely.
 - **Bucket clamping** — source ratings whose exact bucket doesn't exist in the target system are mapped to the nearest available bucket instead of silently skipped (e.g. NC-17 → Sweden's `15`).
 - **Rating filter** — narrow the item list to any single effective rating from a dropdown populated by your actual library content.
+- **Library filter** — scope the item list to one Movie/TV library, so you can work through libraries one at a time. Rating counts follow the selected library. This is a *view* filter: the conversion task and **Run Now** always run across every library, and the Automation card's counts stay server-wide to reflect that.
 - **Persistence status card** — the main page shows whether each library's NFO saver is configured to write `<customrating>` to disk, with a per-library breakdown and a direct link to the Dashboard Libraries page.
 - **Active system display** — the automation card shows the configured target system and its available ratings at a glance.
 - **Standard install path** — admins install via Dashboard → Plugins → Repositories, same as every other Jellyfin plugin.
@@ -58,7 +59,7 @@ https://raw.githubusercontent.com/therealscienta/jellyage/main/manifest.json
 After install, two pages live in the Jellyfin dashboard:
 
 - **Dashboard → Age Ratings** — primary day-to-day surface.
-  Automation card (pending count, toggles, **Run Now**, active system name + ratings, NFO persistence status) plus a searchable, paginated, multi-select item list with filter chips (`All` / `Unrated` / `Has pending change`) and rating/type dropdowns. Titles link directly to each item's detail page. This is where admins fix exceptions.
+  Automation card (server-wide pending count, toggles, **Run Now**, active system name + ratings, NFO persistence status) plus a searchable, paginated, multi-select item list with filter chips (`All` / `Unrated` / `Has pending change`) and library/type/rating dropdowns. Titles link directly to each item's detail page. This is where admins fix exceptions.
 - **Dashboard → Plugins → Age Rating Converter** — setup/config.
   Pick a *Default target rating system*, click **Load Built-in Defaults**, confirm, and save. You can also edit rows freely and tweak the "unrated values" string.
 
@@ -86,12 +87,14 @@ All endpoints require the `RequiresElevation` policy (administrator).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&rating=&page=&pageSize=` | Paginated item list with filter/search/rating. Returns `{ Items, TotalCount, Page, PageSize, UnratedCount, PendingCount }`. |
+| `GET`  | `/AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&rating=&libraryId=&page=&pageSize=` | Paginated item list with filter/search/rating/library. Returns `{ Items, TotalCount, Page, PageSize, UnratedCount, PendingCount }`. The counts are scoped by `type` and `libraryId` (they back the chip badges). |
 | `GET`  | `/AgeRating/SupportedSystems` | List of 17 supported rating systems: `{ Id, DisplayName, ExampleRating }`. |
 | `GET`  | `/AgeRating/DefaultMappings?target=<Id>` | Generated `source → target` defaults for the chosen target system. |
 | `GET`  | `/AgeRating/SystemRatings?system=<Id>` | Ordered rating strings for a given system. |
-| `GET`  | `/AgeRating/RatingSummary` | Effective-rating counts for all Movies/Series (CustomRating preferred over OfficialRating). |
+| `GET`  | `/AgeRating/RatingSummary?libraryId=` | Effective-rating counts for Movies/Series (CustomRating preferred over OfficialRating), optionally scoped to one library. |
 | `GET`  | `/AgeRating/LibraryPersistence` | Per-library NFO saver status: `{ Name, ItemId, NfoSaverEnabled, SaveLocalMetadata, PersistsToDisk }`. |
+| `GET`  | `/AgeRating/Libraries` | Movie/TV/Mixed libraries for the library filter: `{ ItemId, Name }`, ordered by name. |
+| `GET`  | `/AgeRating/Counts` | Server-wide `{ UnratedCount, PendingCount }`, ignoring all list filters — what **Run Now** would act on. |
 | `GET`  | `/AgeRating/Preview` | Items whose next conversion run would change their `CustomRating`. |
 | `POST` | `/AgeRating/ApplyNow` | Run the conversion task now. |
 | `POST` | `/AgeRating/BulkSetRating` | Body `{ ItemIds, Rating }` — write `Rating` to every listed item's `CustomRating` (empty string clears). |
@@ -134,6 +137,8 @@ Jellyfin.Plugin.AgeRating/
 │   ├── ItemListDto.cs                   Paginated list envelope
 │   ├── ItemRowDto.cs                    Row shape (CurrentRating, CustomRating, ProposedRating)
 │   ├── LibraryPersistenceDto.cs         Per-library NFO saver status for /LibraryPersistence
+│   ├── LibraryChoiceDto.cs              Id/name pair for /Libraries (library filter dropdown)
+│   ├── GlobalCountsDto.cs               Server-wide unrated/pending counts for /Counts
 │   ├── RatingSummaryEntryDto.cs         Rating/count pair for /RatingSummary
 │   └── RatingPreviewDto.cs              Row shape for /Preview (legacy endpoint)
 ├── Configuration/
