@@ -19,9 +19,19 @@ public class ItemListDto
     /// <summary>Gets or sets the page size.</summary>
     public int PageSize { get; set; }
 
-    /// <summary>Gets or sets the total unrated-items count across the whole library (filter-independent).</summary>
+    /// <summary>
+    /// Gets or sets the unrated-items count within the current type and library scope,
+    /// before the chip/search/rating filters narrow the list. This backs the "Unrated"
+    /// chip's badge, so it must predict what clicking that chip returns. For the
+    /// server-wide figure shown beside "Run Now", see <see cref="GlobalCountsDto"/>.
+    /// </summary>
     public int UnratedCount { get; set; }
 
-    /// <summary>Gets or sets the total pending-conversion count across the whole library (filter-independent).</summary>
+    /// <summary>
+    /// Gets or sets the pending-conversion count within the current type and library scope,
+    /// before the chip/search/rating filters narrow the list. This backs the "Has pending
+    /// change" chip's badge. For the server-wide figure shown beside "Run Now", see
+    /// <see cref="GlobalCountsDto"/>.
+    /// </summary>
     public int PendingCount { get; set; }
 }
