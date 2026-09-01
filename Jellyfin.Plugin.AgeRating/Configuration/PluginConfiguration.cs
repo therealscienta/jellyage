@@ -12,12 +12,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public bool EnableAutoConversion { get; set; } = true;
 
-    /// <summary>
-    /// Gets or sets a value indicating whether items that already carry a rating are overwritten.
-    /// When false, only items whose current rating matches a source entry are converted if they have
-    /// no recognised target-system rating yet.
-    /// </summary>
-    public bool OverwriteExistingRatings { get; set; } = false;
+    // Note: there is deliberately no "overwrite existing ratings" setting. Automation fills
+    // empty Custom ratings and never revises an existing one, because the plugin cannot tell
+    // its own earlier writes from a rating a person set by hand — so a persistent overwrite
+    // mode would silently revert hand-curated overrides on the next run. Overwriting is a
+    // one-shot, confirmed action instead ("Re-map all" → POST /AgeRating/RemapAll).
+    // Any <OverwriteExistingRatings> element left in an older config XML is simply ignored.
 
     /// <summary>
     /// Gets or sets comma-separated rating values that are treated as "no rating".

@@ -13,4 +13,12 @@ public class GlobalCountsDto
 
     /// <summary>Gets or sets the number of Movies and Series whose next conversion run would change their CustomRating, across all libraries.</summary>
     public int PendingCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many items "Re-map all" would change, across all libraries. Unlike
+    /// <see cref="PendingCount"/> this includes items that already carry a Custom rating —
+    /// which routine runs never touch — so it states the blast radius of that destructive
+    /// action in its confirmation prompt.
+    /// </summary>
+    public int RemapCount { get; set; }
 }

@@ -45,7 +45,7 @@ Follow the patterns already established in the existing files rather than introd
 |------|------|
 | `Jellyfin.Plugin.AgeRating/Plugin.cs` | Entry point. Sets `Plugin.Instance` singleton. Registers **two** `PluginPageInfo` entries: config (under Plugins → My Plugins → Settings) yielded first so Jellyfin's Settings link lands there, and main (`EnableInMainMenu = true`, appears in the admin sidebar as "Age Ratings"). |
 | `Jellyfin.Plugin.AgeRating/PluginServiceRegistrator.cs` | Registers `RatingConversionTask` in the DI container via `IPluginServiceRegistrator`. |
-| `Jellyfin.Plugin.AgeRating/Configuration/PluginConfiguration.cs` | Persisted settings: `EnableAutoConversion`, `OverwriteExistingRatings`, `UnratedValues`, `MappingTableJson`, `DefaultTargetSystem`. |
+| `Jellyfin.Plugin.AgeRating/Configuration/PluginConfiguration.cs` | Persisted settings: `EnableAutoConversion`, `UnratedValues`, `MappingTableJson`, `DefaultTargetSystem`. There is deliberately **no** overwrite setting — see Rating conversion logic. |
 | `Jellyfin.Plugin.AgeRating/Configuration/RatingMapping.cs` | Plain `{ Source, Target }` record used inside `MappingTableJson`. |
 | `Jellyfin.Plugin.AgeRating/Configuration/configPage.html` | Config surface (Dashboard → Plugins → Age Rating Converter). Target-system dropdown, unrated-values input, mapping-table editor with confirmation dialog. |
 | `Jellyfin.Plugin.AgeRating/Configuration/mainPage.html` | Primary surface (Dashboard → Age Ratings). Automation card (pending count, toggles, Run Now, active-system banner, NFO persistence status card), paginated searchable item list, filter chips, library/type/rating dropdowns, multi-select bulk-edit bar. Item titles are clickable links to the Jellyfin detail page. |
@@ -78,9 +78,34 @@ The plugin writes **`CustomRating`**, not `OfficialRating`. Source of the lookup
 
 1. Skip if `OfficialRating` is null/whitespace.
 2. Skip if no mapping exists for the current `OfficialRating`.
-3. Skip if `OverwriteExistingRatings` is off AND `CustomRating` is already non-empty (respect hand-curated overrides).
+3. Skip if `CustomRating` is already non-empty — **unless** this is the explicit re-map path (see below).
 4. Skip if `CustomRating` already equals the mapping target (idempotency).
 5. Otherwise set `item.CustomRating = target` and call `item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)`.
+
+### Automation fills; it never revises
+
+Routine conversion — the post-scan hook and **Run Now** — only writes where `CustomRating` is
+empty. It never changes a value that is already there.
+
+This is not a preference, it's forced by a missing capability: **the plugin cannot distinguish a
+`CustomRating` it wrote from one a person set by hand.** There was previously an
+`OverwriteExistingRatings` setting, and with it on, every hand-set rating showed up as a "pending
+change" proposing to revert it to the mapped value — so the plugin's own bulk-edit feature was
+undone by its own automation, and the Pending badge actively invited the user to do it.
+
+Overwriting is therefore a one-shot, confirmed action instead: `RunRemapAll` /
+`POST /AgeRating/RemapAll`, surfaced as **Re-map all…** with a dialog quoting
+`GlobalCountsDto.RemapCount`. Use it after changing target system or editing the mapping table.
+
+`RatingConversionTask.Convert(bool overwriteExisting, …)` is the single implementation; `Run`
+(post-scan, gated on `EnableAutoConversion`) and `RunManual` (Run Now) pass `false`, `RunRemapAll`
+passes `true`. `RatingController.ComputeProposedRating` takes the same flag and **must** stay in
+step with it — the counts and badges are derived from it, so a divergence means the UI lies about
+what a run will do.
+
+If you ever add provenance (recording what the plugin wrote per item), this restriction can be
+relaxed: values the plugin itself wrote could be re-mapped silently while hand-set ones stay
+protected. That was considered and deferred as too much persistent state for the benefit.
 
 After the loop, the task logs a summary of the top 20 unmapped source ratings (with occurrence counts) at `Information` level. This makes "0/N items converted" diagnosable without enabling debug logging — admins can see which `OfficialRating` values have no matching mapping row.
 
@@ -99,9 +124,10 @@ All endpoints require the `RequiresElevation` authorisation policy.
 | `GET /AgeRating/RatingSummary?libraryId=` | `IReadOnlyList<RatingSummaryEntryDto>` — effective-rating / count pairs for Movies and Series (CustomRating preferred). Used to populate the rating filter dropdown; `libraryId` scopes the counts to one library so the dropdown can't offer a rating that yields zero rows. Still ignores `type`. |
 | `GET /AgeRating/LibraryPersistence` | `IReadOnlyList<LibraryPersistenceDto>` — per-library NFO saver status for Movie/TV/Mixed libraries. `PersistsToDisk = NfoSaverEnabled && SaveLocalMetadata`. |
 | `GET /AgeRating/Libraries` | `IReadOnlyList<LibraryChoiceDto>` — Movie/TV/Mixed libraries with a resolved `ItemId`, ordered by name. Populates the main page's library filter. |
-| `GET /AgeRating/Counts` | `GlobalCountsDto` — server-wide `UnratedCount`/`PendingCount`, ignoring every list filter. Backs the Automation card, which sits next to Run Now (also global). |
+| `GET /AgeRating/Counts` | `GlobalCountsDto` — server-wide `UnratedCount`/`PendingCount`/`RemapCount`, ignoring every list filter. Backs the Automation card, which sits next to Run Now (also global). `RemapCount` additionally counts items that already carry a Custom rating, and states the blast radius in the Re-map confirmation. |
 | `GET /AgeRating/Preview` | `IEnumerable<RatingPreviewDto>` — items whose next conversion run would actually change `CustomRating`. |
-| `POST /AgeRating/ApplyNow` | Runs `RatingConversionTask.Run()` inline; 200 when done. |
+| `POST /AgeRating/ApplyNow` | Runs `RatingConversionTask.RunManual()` inline (fills empty Custom ratings only, never overwrites); 200 when done. |
+| `POST /AgeRating/RemapAll` | Runs `RatingConversionTask.RunRemapAll()` inline — **overwrites** existing Custom ratings, including hand-set ones. The only route to that behaviour; UI gates it behind a confirmation. |
 | `POST /AgeRating/BulkSetRating` | Body `{ ItemIds, Rating }`; writes `Rating` to every listed item's `CustomRating` (empty string clears). Returns `{ UpdatedCount }`. |
 
 ## Dashboard UI notes
