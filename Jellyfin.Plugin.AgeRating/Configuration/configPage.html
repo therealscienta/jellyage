@@ -41,6 +41,12 @@
             dialog.arc-dialog h3 { margin: 0 0 0.6em; }
             dialog.arc-dialog .arc-dialog-body { color: #ccc; margin: 0 0 1em; }
             dialog.arc-dialog .arc-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+            /* See mainPage.html: Emby's flat button (no .raised) is white-on-near-white
+               against this page's dark dialog, so secondary buttons set both explicitly. */
+            button.arc-btn-secondary { background: #2e2e2e; color: #eaeaea; border: 1px solid #555; border-radius: 4px; }
+            button.arc-btn-secondary:hover:not(:disabled) { background: #3a3a3a; border-color: #777; }
+            button.arc-btn-secondary:disabled { opacity: 0.45; }
         </style>
 
         <div data-role="content">
@@ -113,7 +119,7 @@
                     <h3>Replace mapping table?</h3>
                     <p class="arc-dialog-body" id="arc-confirm-body"></p>
                     <div class="arc-dialog-actions">
-                        <button is="emby-button" type="button" id="arc-confirm-cancel" class="emby-button">
+                        <button is="emby-button" type="button" id="arc-confirm-cancel" class="emby-button arc-btn-secondary">
                             <span>Cancel</span>
                         </button>
                         <button is="emby-button" type="button" id="arc-confirm-replace" class="raised button-submit emby-button">

@@ -127,6 +127,14 @@
             .arc-title-link:hover { color: #00a4dc; text-decoration: underline; }
 
             .arc-automation-note { margin: 0.6em 0 0; font-size: 0.9em; color: #aaa; max-width: 62em; }
+
+            /* Emby's flat button (no .raised) takes a near-white surface from the theme
+               while its label stays white — unreadable on the dark cards this page uses.
+               Secondary buttons therefore set surface AND text colour explicitly rather
+               than inheriting either. Element+class beats the theme's .emby-button. */
+            button.arc-btn-secondary { background: #2e2e2e; color: #eaeaea; border: 1px solid #555; border-radius: 4px; }
+            button.arc-btn-secondary:hover:not(:disabled) { background: #3a3a3a; border-color: #777; }
+            button.arc-btn-secondary:disabled { opacity: 0.45; }
             dialog.arc-dialog { background: #202020; border: 1px solid #2f2f2f; border-radius: 6px; color: inherit; padding: 1.2em 1.4em; max-width: 36em; }
             dialog.arc-dialog::backdrop { background: rgba(0,0,0,0.6); }
             dialog.arc-dialog h3 { margin: 0 0 0.6em; }
@@ -155,7 +163,7 @@
                             <span>Run after library scan</span>
                         </label>
                         <div style="flex:1"></div>
-                        <button is="emby-button" type="button" id="arc-remap-all" class="emby-button">
+                        <button is="emby-button" type="button" id="arc-remap-all" class="emby-button arc-btn-secondary">
                             <span>Re-map all…</span>
                         </button>
                         <button is="emby-button" type="button" id="arc-run-now" class="raised button-submit emby-button">
@@ -233,9 +241,9 @@
                     </div>
 
                     <div class="arc-pager">
-                        <button is="emby-button" type="button" id="arc-prev" class="emby-button">Prev</button>
+                        <button is="emby-button" type="button" id="arc-prev" class="emby-button arc-btn-secondary">Prev</button>
                         <span class="arc-pager-info" id="arc-pager-info">–</span>
-                        <button is="emby-button" type="button" id="arc-next" class="emby-button">Next</button>
+                        <button is="emby-button" type="button" id="arc-next" class="emby-button arc-btn-secondary">Next</button>
                     </div>
                 </div>
 
@@ -246,7 +254,7 @@
                     <button is="emby-button" type="button" id="arc-bulk-apply" class="raised button-submit emby-button">
                         <span>Apply to selected</span>
                     </button>
-                    <button is="emby-button" type="button" id="arc-bulk-clear" class="emby-button">
+                    <button is="emby-button" type="button" id="arc-bulk-clear" class="emby-button arc-btn-secondary">
                         <span>Clear selection</span>
                     </button>
                     <div class="arc-bulk-spacer"></div>
@@ -258,7 +266,7 @@
                     <h3>Re-map all ratings?</h3>
                     <p class="arc-dialog-body" id="arc-remap-body"></p>
                     <div class="arc-dialog-actions">
-                        <button is="emby-button" type="button" id="arc-remap-cancel" class="emby-button">
+                        <button is="emby-button" type="button" id="arc-remap-cancel" class="emby-button arc-btn-secondary">
                             <span>Cancel</span>
                         </button>
                         <button is="emby-button" type="button" id="arc-remap-confirm" class="raised button-submit emby-button">
