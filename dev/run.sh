@@ -37,7 +37,7 @@ do_reset() {
   # delete them AND reclaim ownership of the $DEV_ENV parent dir so the next
   # mkdir in ensure_media can create fresh subdirs as the host user.
   mkdir -p "$DEV_ENV" 2>/dev/null || true
-  docker run --rm -v "$DEV_ENV":/t alpine:3.20 sh -c "
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$DEV_ENV":/t alpine:3.20 sh -c "
     rm -rf /t/config /t/cache /t/media /t/dist || true
     chown -R $(id -u):$(id -g) /t
   " || true
@@ -60,7 +60,7 @@ ensure_media() {
   # If a previous Jellyfin run left $DEV_ENV owned by root, reclaim it so
   # the mkdir below can create subdirs as the host user.
   if [ ! -w "$DEV_ENV" ]; then
-    docker run --rm -v "$DEV_ENV":/t alpine:3.20 chown -R "$(id -u):$(id -g)" /t
+    MSYS_NO_PATHCONV=1 docker run --rm -v "$DEV_ENV":/t alpine:3.20 chown -R "$(id -u):$(id -g)" /t
   fi
   mkdir -p "$DEV_ENV/config" "$DEV_ENV/cache" "$DEV_ENV/media"
   if [ ! -d "$DEV_ENV/media/Movies" ] || [ -z "$(ls -A "$DEV_ENV/media/Movies" 2>/dev/null)" ]; then

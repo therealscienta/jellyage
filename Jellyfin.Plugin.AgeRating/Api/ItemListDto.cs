@@ -34,4 +34,15 @@ public class ItemListDto
     /// <see cref="GlobalCountsDto"/>.
     /// </summary>
     public int PendingCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets the count of items that still need a mapping — their OfficialRating has no
+    /// entry in the mapping table and no Custom rating has resolved them — within the current
+    /// type and library scope, before the chip/search/rating filters narrow the list. This backs
+    /// the "No mapping match" chip's badge, so — like the two counts above — it must predict what
+    /// clicking that chip returns. Items already carrying a Custom rating are excluded: nothing
+    /// will change them, so they are not actionable here. The unresolved mapping-table gap itself
+    /// is reported per rating value by <c>GET /AgeRating/UnmappedRatings</c> instead.
+    /// </summary>
+    public int NoMappingCount { get; set; }
 }
