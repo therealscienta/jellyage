@@ -50,11 +50,27 @@ public class RatingConversionTask : ILibraryPostScanTask
     /// Runs the conversion unconditionally, ignoring <see cref="PluginConfiguration.EnableAutoConversion"/>.
     /// Used by the "Run Now" API action, which is deliberately independent of the
     /// "Run after library scan" automation toggle — the two are separate controls.
+    /// Fills empty Custom ratings only; an existing value is never disturbed.
     /// </summary>
     /// <param name="progress">Progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task RunManual(IProgress<double> progress, CancellationToken cancellationToken)
+    public Task RunManual(IProgress<double> progress, CancellationToken cancellationToken)
+        => Convert(overwriteExisting: false, progress, cancellationToken);
+
+    /// <summary>
+    /// Re-applies the mapping table to every item, <b>overwriting</b> Custom ratings that
+    /// are already set — including ones a person chose by hand. This is destructive and is
+    /// only ever reached through an explicit, confirmed "Re-map all" action; routine runs
+    /// (post-scan and Run Now) never take this path.
+    /// </summary>
+    /// <param name="progress">Progress reporter.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public Task RunRemapAll(IProgress<double> progress, CancellationToken cancellationToken)
+        => Convert(overwriteExisting: true, progress, cancellationToken);
+
+    private async Task Convert(bool overwriteExisting, IProgress<double> progress, CancellationToken cancellationToken)
     {
         var config = Plugin.Instance?.Configuration;
         if (config is null)
@@ -100,10 +116,12 @@ public class RatingConversionTask : ILibraryPostScanTask
                 continue;
             }
 
-            // Respect an existing CustomRating unless the user opted in to overwrite.
-            // This is where a hand-curated override (e.g. via the plugin's bulk edit
-            // or Jellyfin's own metadata editor) is protected from automation.
-            if (!config.OverwriteExistingRatings && !string.IsNullOrWhiteSpace(item.CustomRating))
+            // Automation fills gaps; it does not revise decisions. An existing CustomRating
+            // is someone's choice — made through this plugin's bulk edit or Jellyfin's own
+            // metadata editor — and the plugin cannot tell those apart from its own earlier
+            // writes, so it leaves all of them alone. Overwriting is reachable only through
+            // the explicit, confirmed "Re-map all" action.
+            if (!overwriteExisting && !string.IsNullOrWhiteSpace(item.CustomRating))
             {
                 progress.Report(100.0 * i / total);
                 continue;
@@ -125,7 +143,11 @@ public class RatingConversionTask : ILibraryPostScanTask
             progress.Report(100.0 * i / total);
         }
 
-        _logger.LogInformation("Age Rating Converter: converted {Count}/{Total} items.", converted, total);
+        _logger.LogInformation(
+            "Age Rating Converter: converted {Count}/{Total} items ({Mode}).",
+            converted,
+            total,
+            overwriteExisting ? "re-map all, overwriting existing custom ratings" : "fill empty only");
 
         if (unmappedCounts.Count > 0)
         {

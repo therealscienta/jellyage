@@ -125,6 +125,13 @@
             }
             .arc-title-link { color: inherit; text-decoration: none; }
             .arc-title-link:hover { color: #00a4dc; text-decoration: underline; }
+
+            .arc-automation-note { margin: 0.6em 0 0; font-size: 0.9em; color: #aaa; max-width: 62em; }
+            dialog.arc-dialog { background: #202020; border: 1px solid #2f2f2f; border-radius: 6px; color: inherit; padding: 1.2em 1.4em; max-width: 36em; }
+            dialog.arc-dialog::backdrop { background: rgba(0,0,0,0.6); }
+            dialog.arc-dialog h3 { margin: 0 0 0.6em; }
+            dialog.arc-dialog .arc-dialog-body { color: #ccc; margin: 0 0 1em; }
+            dialog.arc-dialog .arc-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
         </style>
 
         <div data-role="content">
@@ -147,15 +154,19 @@
                             <input id="arc-auto-toggle" type="checkbox" is="emby-checkbox" />
                             <span>Run after library scan</span>
                         </label>
-                        <label class="checkboxContainer">
-                            <input id="arc-overwrite-toggle" type="checkbox" is="emby-checkbox" />
-                            <span>Overwrite existing ratings</span>
-                        </label>
                         <div style="flex:1"></div>
+                        <button is="emby-button" type="button" id="arc-remap-all" class="emby-button">
+                            <span>Re-map all…</span>
+                        </button>
                         <button is="emby-button" type="button" id="arc-run-now" class="raised button-submit emby-button">
                             <span>Run Now</span>
                         </button>
                     </div>
+                    <p class="arc-automation-note">
+                        Run Now fills in ratings that are still empty. Ratings you have set by
+                        hand are never changed — use <em>Re-map all</em> to re-apply the mapping
+                        table over them, for instance after switching target system.
+                    </p>
                     <div id="arc-automation-msg" class="arc-msg"></div>
                     <div id="arc-system-info" class="arc-system-info" style="display:none;">
                         Active system: <span id="arc-system-name" class="arc-system-name"></span>
@@ -242,6 +253,20 @@
                     <span id="arc-bulk-msg" class="arc-msg"></span>
                 </div>
 
+                <!-- Re-map confirmation: this is the one action that overwrites hand-set ratings -->
+                <dialog id="arc-remap-dialog" class="arc-dialog">
+                    <h3>Re-map all ratings?</h3>
+                    <p class="arc-dialog-body" id="arc-remap-body"></p>
+                    <div class="arc-dialog-actions">
+                        <button is="emby-button" type="button" id="arc-remap-cancel" class="emby-button">
+                            <span>Cancel</span>
+                        </button>
+                        <button is="emby-button" type="button" id="arc-remap-confirm" class="raised button-submit emby-button">
+                            <span>Overwrite ratings</span>
+                        </button>
+                    </div>
+                </dialog>
+
             </div>
         </div>
 
@@ -267,6 +292,7 @@
                 persistence: null,     // array of LibraryPersistenceDto, null until loaded
                 persistAutoExpanded: false, // one-shot: only auto-expand the details once per session
                 lastPendingCount: 0,   // cached so persistence-load and items-load can coordinate
+                lastRemapCount: 0,     // how many items "Re-map all" would overwrite; for its confirm prompt
             };
 
             // ── Helpers ──────────────────────────────────────────────────────────
@@ -310,7 +336,6 @@
                     var config = results[0];
                     var systems = results[1] || [];
                     q('#arc-auto-toggle').checked = !!config.EnableAutoConversion;
-                    q('#arc-overwrite-toggle').checked = !!config.OverwriteExistingRatings;
                     state.targetSystem = config.DefaultTargetSystem || '';
                     var match = systems.find(function (s) { return s.Id === state.targetSystem; });
                     state.targetExample = match ? match.ExampleRating : '';
@@ -508,6 +533,7 @@
                 }).then(function (counts) {
                     if (!counts) return;
                     state.lastPendingCount = counts.PendingCount;
+                    state.lastRemapCount = counts.RemapCount;
                     renderPendingDisplay(counts.UnratedCount, counts.PendingCount);
                     maybeAutoExpandPersistence();
                 }).catch(function () {
@@ -531,9 +557,8 @@
                     ApiClient.updatePluginConfiguration(PLUGIN_ID, config).then(function () {
                         msg.textContent = 'Saved.';
                         setTimeout(function () { if (msg.textContent === 'Saved.') msg.textContent = ''; }, 1500);
-                        // Pending count may have changed (Overwrite toggle affects counts)
-                        refreshItems();
-                        loadGlobalCounts();
+                        // No refresh needed: the only remaining toggle schedules *when* a run
+                        // happens, it doesn't change what any run would do, so no count moves.
                     }).catch(function () {
                         msg.className = 'arc-msg arc-err';
                         msg.textContent = 'Failed to save.';
@@ -544,8 +569,37 @@
             q('#arc-auto-toggle').addEventListener('change', function (e) {
                 saveConfigToggle('EnableAutoConversion', e.target.checked);
             });
-            q('#arc-overwrite-toggle').addEventListener('change', function (e) {
-                saveConfigToggle('OverwriteExistingRatings', e.target.checked);
+            // ── Re-map all (confirmed; the only path that overwrites) ───────────
+            q('#arc-remap-all').addEventListener('click', function () {
+                var n = state.lastRemapCount;
+                q('#arc-remap-body').textContent = n === 0
+                    ? 'Every item already matches the mapping table — there is nothing to re-map.'
+                    : 'This re-applies the mapping table to ' + n + ' item(s), replacing custom '
+                      + 'ratings that are already set — including any you chose by hand. This '
+                      + 'cannot be undone.';
+                q('#arc-remap-confirm').disabled = n === 0;
+                q('#arc-remap-dialog').showModal();
+            });
+
+            q('#arc-remap-cancel').addEventListener('click', function () {
+                q('#arc-remap-dialog').close();
+            });
+
+            q('#arc-remap-confirm').addEventListener('click', function () {
+                q('#arc-remap-dialog').close();
+                var msg = q('#arc-automation-msg');
+                msg.className = 'arc-msg';
+                msg.textContent = 'Re-mapping all ratings…';
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('AgeRating/RemapAll') }).then(function () {
+                    msg.textContent = 'Re-map complete.';
+                    setTimeout(function () { if (msg.textContent === 'Re-map complete.') msg.textContent = ''; }, 2000);
+                    refreshItems();
+                    loadRatingSummary();
+                    loadGlobalCounts();
+                }).catch(function () {
+                    msg.className = 'arc-msg arc-err';
+                    msg.textContent = 'Re-map failed. Check server logs.';
+                });
             });
 
             // ── Run Now ─────────────────────────────────────────────────────────

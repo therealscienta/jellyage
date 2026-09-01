@@ -18,6 +18,7 @@ The plugin writes to Jellyfin's **CustomRating** field rather than overwriting `
 
 - **Target-system-driven defaults** — pick your household's rating system (e.g. BBFC) once; built-in defaults map every other supported system's ratings onto yours.
 - **Automation first** — runs as a `ILibraryPostScanTask` after every library scan. Manual `Run Now` button for on-demand conversion.
+- **Your edits stick** — automation fills in ratings that are empty and never revises one you set yourself. Re-applying the mapping over existing ratings is a separate, confirmed **Re-map all** action.
 - **Bulk overrides** — filter, multi-select, and apply a custom rating to many items at once.
 - **Non-destructive** — conversions land in `CustomRating`; `OfficialRating` from TMDb/OMDb is never touched.
 - **17 rating systems** covered out of the box: MPAA, BBFC, FSK, CNC, PEGI, Kijkwijzer, Sweden, Norway, Denmark, Finland, Iceland, EIRIN, KMRB, ACB, HKCAT, OFLC-NZ, Russia. Add or override individual rows freely.
@@ -72,10 +73,20 @@ For each Movie or Series in any library:
 1. Read `OfficialRating` (the provider's value).
 2. Look up `OfficialRating` in the mapping table.
 3. If there's a hit, set `CustomRating` to the mapped target and persist via `UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit)`.
-4. Skip if `OverwriteExistingRatings` is off and `CustomRating` is already set (respects manual overrides).
+4. Skip if `CustomRating` is already set — automation fills gaps, it never revises a rating you chose.
 5. Skip if `CustomRating` already equals the target (idempotency).
 
 `CustomRating` survives ordinary metadata refreshes. A full `ReplaceAllMetadata` refresh can clear it — same behavior as Jellyfin's own Custom Rating field.
+
+### Your ratings are never overwritten by automation
+
+A rating you set — through this plugin's bulk edit or Jellyfin's own metadata editor — is left
+alone by the post-scan run and by **Run Now**. The plugin can't tell its own earlier writes apart
+from your choices, so it treats every existing value as yours.
+
+When you *do* want the mapping re-applied over existing values — after switching target system,
+say — use **Re-map all…**, which asks for confirmation and tells you how many items it will
+overwrite. That is the only action that replaces a rating that is already set.
 
 ### NFO persistence
 
@@ -94,9 +105,10 @@ All endpoints require the `RequiresElevation` policy (administrator).
 | `GET`  | `/AgeRating/RatingSummary?libraryId=` | Effective-rating counts for Movies/Series (CustomRating preferred over OfficialRating), optionally scoped to one library. |
 | `GET`  | `/AgeRating/LibraryPersistence` | Per-library NFO saver status: `{ Name, ItemId, NfoSaverEnabled, SaveLocalMetadata, PersistsToDisk }`. |
 | `GET`  | `/AgeRating/Libraries` | Movie/TV/Mixed libraries for the library filter: `{ ItemId, Name }`, ordered by name. |
-| `GET`  | `/AgeRating/Counts` | Server-wide `{ UnratedCount, PendingCount }`, ignoring all list filters — what **Run Now** would act on. |
+| `GET`  | `/AgeRating/Counts` | Server-wide `{ UnratedCount, PendingCount, RemapCount }`, ignoring all list filters. `PendingCount` is what **Run Now** would act on; `RemapCount` is what **Re-map all** would overwrite. |
 | `GET`  | `/AgeRating/Preview` | Items whose next conversion run would change their `CustomRating`. |
-| `POST` | `/AgeRating/ApplyNow` | Run the conversion task now. |
+| `POST` | `/AgeRating/ApplyNow` | Run the conversion task now — fills empty custom ratings only, never overwrites. |
+| `POST` | `/AgeRating/RemapAll` | Re-apply the mapping table over **existing** custom ratings, including hand-set ones. Destructive; the UI confirms first. |
 | `POST` | `/AgeRating/BulkSetRating` | Body `{ ItemIds, Rating }` — write `Rating` to every listed item's `CustomRating` (empty string clears). |
 
 ## Development
@@ -143,7 +155,7 @@ Jellyfin.Plugin.AgeRating/
 │   └── RatingPreviewDto.cs              Row shape for /Preview (legacy endpoint)
 ├── Configuration/
 │   ├── PluginConfiguration.cs           Settings storage (EnableAutoConversion,
-│   │                                    OverwriteExistingRatings, UnratedValues,
+│   │                                    UnratedValues,
 │   │                                    MappingTableJson, DefaultTargetSystem)
 │   ├── RatingMapping.cs                 Source-to-target record for MappingTableJson
 │   ├── configPage.html                  Config surface: settings + mapping editor

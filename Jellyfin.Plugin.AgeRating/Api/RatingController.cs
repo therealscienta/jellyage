@@ -202,6 +202,7 @@ public class RatingController : ControllerBase
 
         var unrated = 0;
         var pending = 0;
+        var remap = 0;
         foreach (var item in GetMovieAndSeriesItems())
         {
             if (IsUnrated(item.CustomRating, item.OfficialRating, unratedSet))
@@ -209,13 +210,23 @@ public class RatingController : ControllerBase
                 unrated++;
             }
 
-            if (ComputeProposedRating(item, lookup, config) is not null)
+            if (ComputeProposedRating(item, lookup, overwriteExisting: false) is not null)
             {
                 pending++;
             }
+
+            if (ComputeProposedRating(item, lookup, overwriteExisting: true) is not null)
+            {
+                remap++;
+            }
         }
 
-        return Ok(new GlobalCountsDto { UnratedCount = unrated, PendingCount = pending });
+        return Ok(new GlobalCountsDto
+        {
+            UnratedCount = unrated,
+            PendingCount = pending,
+            RemapCount = remap,
+        });
     }
 
     /// <summary>
@@ -320,7 +331,7 @@ public class RatingController : ControllerBase
         {
             var source = item.OfficialRating;
             var custom = item.CustomRating;
-            var proposed = ComputeProposedRating(item, lookup, config);
+            var proposed = ComputeProposedRating(item, lookup, overwriteExisting: false);
 
             if (IsUnrated(custom, source, unratedSet))
             {
@@ -450,7 +461,7 @@ public class RatingController : ControllerBase
         var previews = GetMovieAndSeriesItems()
             .Select(i =>
             {
-                var target = ComputeProposedRating(i, lookup, config);
+                var target = ComputeProposedRating(i, lookup, overwriteExisting: false);
                 if (target is null)
                 {
                     return null;
@@ -472,6 +483,8 @@ public class RatingController : ControllerBase
 
     /// <summary>
     /// Triggers rating conversion immediately without waiting for a library scan.
+    /// Fills empty Custom ratings only — an existing value is never disturbed, so this
+    /// is safe to press at any time. Use <see cref="RemapAll"/> to revise existing values.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>HTTP 200 when conversion completes.</returns>
@@ -487,6 +500,30 @@ public class RatingController : ControllerBase
         }
 
         await task.RunManual(new Progress<double>(), cancellationToken).ConfigureAwait(false);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Re-applies the mapping table to every item, <b>overwriting</b> Custom ratings that are
+    /// already set — including hand-curated ones. Destructive, and the only route to that
+    /// behaviour: routine conversion never overwrites. Intended for after a target-system or
+    /// mapping-table change, behind a confirmation that quotes
+    /// <see cref="GlobalCountsDto.RemapCount"/>.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>HTTP 200 when the re-map completes.</returns>
+    [HttpPost("RemapAll")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult> RemapAll(CancellationToken cancellationToken)
+    {
+        var task = HttpContext.RequestServices.GetService(typeof(RatingConversionTask)) as RatingConversionTask;
+        if (task is null)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+
+        await task.RunRemapAll(new Progress<double>(), cancellationToken).ConfigureAwait(false);
         return Ok();
     }
 
@@ -558,15 +595,19 @@ public class RatingController : ControllerBase
     }
 
     /// <summary>
-    /// Decides what the next conversion run would write to this item's CustomRating,
-    /// or null when it would leave the item alone. Mirrors the skip logic in
-    /// RatingConversionTask.Run so the Pending badge and Preview can't drift from it.
+    /// Decides what a conversion run would write to this item's CustomRating, or null when
+    /// it would leave the item alone. Mirrors the skip logic in RatingConversionTask so the
+    /// Pending badge and Preview can't drift from what a run actually does.
     /// </summary>
     /// <param name="item">The library item.</param>
     /// <param name="lookup">Source-to-target rating lookup.</param>
-    /// <param name="config">Current plugin configuration.</param>
+    /// <param name="overwriteExisting">
+    /// False for the routine path (post-scan and Run Now), which only fills an empty
+    /// CustomRating. True only for the explicit "Re-map all" action, which revises
+    /// existing values — including hand-set ones.
+    /// </param>
     /// <returns>The target rating, or null if nothing would change.</returns>
-    private static string? ComputeProposedRating(BaseItem item, Dictionary<string, string> lookup, PluginConfiguration config)
+    private static string? ComputeProposedRating(BaseItem item, Dictionary<string, string> lookup, bool overwriteExisting)
     {
         var source = item.OfficialRating;
         if (string.IsNullOrWhiteSpace(source))
@@ -579,8 +620,8 @@ public class RatingController : ControllerBase
             return null;
         }
 
-        // Respect a hand-curated override unless the user opted in to overwrite.
-        if (!config.OverwriteExistingRatings && !string.IsNullOrWhiteSpace(item.CustomRating))
+        // An existing CustomRating is someone's decision. The routine path never revises it.
+        if (!overwriteExisting && !string.IsNullOrWhiteSpace(item.CustomRating))
         {
             return null;
         }
