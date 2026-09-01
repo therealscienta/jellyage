@@ -107,6 +107,13 @@
                         </button>
                         <button is="emby-button" type="button" id="SaveMappingsBtn" class="raised button-submit emby-button">Save Mappings</button>
                     </div>
+                    <div class="arc-actions">
+                        <button is="emby-button" type="button" id="AddRowBtn" class="raised emby-button">+ Add Row</button>
+                    </div>
+                    <div id="UnmappedSection" style="display:none; margin-top:1em;">
+                        <div class="arc-card-title" style="font-size:0.85em;">Unmapped in library (<span id="UnmappedCount">0</span>)</div>
+                        <div id="UnmappedChips" class="arc-chip-row"></div>
+                    </div>
                     <div id="arc-mappings-msg" class="arc-msg"></div>
                     <div id="arc-empty-notice" class="arc-empty-notice" style="display:none;">
                         <strong>No mappings yet</strong>
@@ -116,13 +123,6 @@
                         <thead><tr><th>Source Rating</th><th>Target Rating</th><th></th></tr></thead>
                         <tbody id="MappingsBody"></tbody>
                     </table>
-                    <div class="arc-actions">
-                        <button is="emby-button" type="button" id="AddRowBtn" class="raised emby-button">+ Add Row</button>
-                    </div>
-                    <div id="UnmappedSection" style="display:none; margin-top:1em;">
-                        <div class="arc-card-title" style="font-size:0.85em;">Unmapped in library (<span id="UnmappedCount">0</span>)</div>
-                        <div id="UnmappedChips" class="arc-chip-row"></div>
-                    </div>
                 </div>
 
                 <!-- Load-defaults confirmation dialog -->
@@ -288,7 +288,11 @@
                 updateEmptyNotice();
             }
 
-            function addMappingRow(src, tgt, isManual) {
+            // prepend: put the row at the top instead of the bottom. Used for rows the admin
+            // adds by hand, so a new row appears next to the buttons that created it rather
+            // than at the far end of a long table. Bulk loads (initial render, Load Defaults)
+            // append, because their order is already meaningful.
+            function addMappingRow(src, tgt, isManual, prepend) {
                 var tbody = q('#MappingsBody');
                 var tr = document.createElement('tr');
                 tr.dataset.manual = isManual ? '1' : '0';
@@ -302,7 +306,12 @@
                     tr.remove();
                     updateEmptyNotice();
                 });
-                tbody.appendChild(tr);
+                if (prepend && tbody.firstChild) {
+                    tbody.insertBefore(tr, tbody.firstChild);
+                } else {
+                    tbody.appendChild(tr);
+                }
+
                 updateEmptyNotice();
                 return tr;
             }
@@ -337,7 +346,7 @@
             }
 
             q('#AddRowBtn').addEventListener('click', function () {
-                var tr = addMappingRow('', '', true);
+                var tr = addMappingRow('', '', true, true);
                 if (tr) {
                     var input = tr.querySelector('.arc-src');
                     if (input) {
@@ -452,7 +461,7 @@
                     btn.dataset.rating = e.Rating;
                     btn.textContent = '+ ' + e.Rating + ' (' + e.Count + ')';
                     btn.addEventListener('click', function () {
-                        var tr = addMappingRow(e.Rating, '', true);
+                        var tr = addMappingRow(e.Rating, '', true, true);
                         btn.remove();
                         var n = Math.max(0, parseInt(countEl.textContent, 10) - 1);
                         countEl.textContent = String(n);

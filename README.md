@@ -23,6 +23,7 @@ The plugin writes to Jellyfin's **CustomRating** field rather than overwriting `
 - **Non-destructive** — conversions land in `CustomRating`; `OfficialRating` from TMDb/OMDb is never touched.
 - **17 rating systems** covered out of the box: MPAA, BBFC, FSK, CNC, PEGI, Kijkwijzer, Sweden, Norway, Denmark, Finland, Iceland, EIRIN, KMRB, ACB, HKCAT, OFLC-NZ, Russia. Add or override individual rows freely.
 - **Bucket clamping** — source ratings whose exact bucket doesn't exist in the target system are mapped to the nearest available bucket instead of silently skipped (e.g. NC-17 → Sweden's `15`).
+- **Unmapped-rating worklist** — the settings page lists source ratings found in your library that have no mapping row, with counts; clicking one starts a mapping row pre-filled. The item list has a matching **No mapping match** filter for items still waiting on one.
 - **Rating filter** — narrow the item list to any single effective rating from a dropdown populated by your actual library content.
 - **Library filter** — scope the item list to one Movie/TV library, so you can work through libraries one at a time. Rating counts follow the selected library. This is a *view* filter: the conversion task and **Run Now** always run across every library, and the Automation card's counts stay server-wide to reflect that.
 - **Persistence status card** — the main page shows whether each library's NFO saver is configured to write `<customrating>` to disk, with a per-library breakdown and a direct link to the Dashboard Libraries page.
@@ -98,13 +99,14 @@ All endpoints require the `RequiresElevation` policy (administrator).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/AgeRating/Items?filter=all\|unrated\|pending&type=all\|Movie\|Series&search=&rating=&libraryId=&page=&pageSize=` | Paginated item list with filter/search/rating/library. Returns `{ Items, TotalCount, Page, PageSize, UnratedCount, PendingCount }`. The counts are scoped by `type` and `libraryId` (they back the chip badges). |
+| `GET`  | `/AgeRating/Items?filter=all\|unrated\|pending\|nomapping&type=all\|Movie\|Series&search=&rating=&libraryId=&page=&pageSize=` | Paginated item list with filter/search/rating/library. Returns `{ Items, TotalCount, Page, PageSize, UnratedCount, PendingCount, NoMappingCount }`. The counts are scoped by `type` and `libraryId` (they back the chip badges). |
 | `GET`  | `/AgeRating/SupportedSystems` | List of 17 supported rating systems: `{ Id, DisplayName, ExampleRating }`. |
 | `GET`  | `/AgeRating/DefaultMappings?target=<Id>` | Generated `source → target` defaults for the chosen target system. |
 | `GET`  | `/AgeRating/SystemRatings?system=<Id>` | Ordered rating strings for a given system. |
 | `GET`  | `/AgeRating/RatingSummary?libraryId=` | Effective-rating counts for Movies/Series (CustomRating preferred over OfficialRating), optionally scoped to one library. |
 | `GET`  | `/AgeRating/LibraryPersistence` | Per-library NFO saver status: `{ Name, ItemId, NfoSaverEnabled, SaveLocalMetadata, PersistsToDisk }`. |
 | `GET`  | `/AgeRating/Libraries` | Movie/TV/Mixed libraries for the library filter: `{ ItemId, Name }`, ordered by name. |
+| `GET`  | `/AgeRating/UnmappedRatings` | Source ratings in your library with no mapping row: `{ Rating, Count }`, most common first. |
 | `GET`  | `/AgeRating/Counts` | Server-wide `{ UnratedCount, PendingCount, RemapCount }`, ignoring all list filters. `PendingCount` is what **Run Now** would act on; `RemapCount` is what **Re-map all** would overwrite. |
 | `GET`  | `/AgeRating/Preview` | Items whose next conversion run would change their `CustomRating`. |
 | `POST` | `/AgeRating/ApplyNow` | Run the conversion task now — fills empty custom ratings only, never overwrites. |
@@ -151,6 +153,7 @@ Jellyfin.Plugin.AgeRating/
 │   ├── LibraryPersistenceDto.cs         Per-library NFO saver status for /LibraryPersistence
 │   ├── LibraryChoiceDto.cs              Id/name pair for /Libraries (library filter dropdown)
 │   ├── GlobalCountsDto.cs               Server-wide unrated/pending counts for /Counts
+│   ├── UnmappedRatingEntryDto.cs        Unmapped source rating / count for /UnmappedRatings
 │   ├── RatingSummaryEntryDto.cs         Rating/count pair for /RatingSummary
 │   └── RatingPreviewDto.cs              Row shape for /Preview (legacy endpoint)
 ├── Configuration/
