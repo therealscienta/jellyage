@@ -6,11 +6,11 @@ The plugin writes to Jellyfin's **CustomRating** field rather than overwriting `
 
 ## Screenshots
 
-**Age Ratings page** — day-to-day item list with automation controls and persistence status:
+**Age Ratings page** — day-to-day item list with automation controls, per-library NFO persistence status, and filter chips for unrated / pending / unmapped items:
 
 ![Age Ratings main page](docs/screenshots/main-page.png)
 
-**Settings page** — target system selection and mapping table editor:
+**Settings page** — mapping table editor, with the unmapped-in-library worklist above it:
 
 ![Config page](docs/screenshots/config-page.png)
 
@@ -133,6 +133,21 @@ A reproducible end-to-end dev environment under [dev/](dev/) builds the DLL and 
 - `./dev/run.sh --via-manifest` — *manifest* mode; packages the plugin into a `.zip`, serves it with an nginx sidecar, and Jellyfin installs it through the standard Repositories UI. Exercises the same path real users hit.
 
 Other commands: `./dev/run.sh --reset` (wipe state), `--stop`, `--down`, `--logs`.
+
+### Regenerating the screenshots
+
+The images in [docs/screenshots/](docs/screenshots/) come from [dev/screenshot.mjs](dev/screenshot.mjs), driven by Playwright against the dev harness. It expects an admin account named `root` with password `test`, and a library that has actually been scanned — the shots are only useful with real data behind them.
+
+```bash
+./dev/run.sh                              # start Jellyfin with the plugin
+# complete the setup wizard as root/test, add /media/Movies and /media/Shows,
+# let the scan finish, then pick a target system and load the built-in defaults
+npm install playwright
+npx playwright install --with-deps chromium
+node dev/screenshot.mjs                   # writes docs/screenshots/*.png
+```
+
+Re-shoot whenever the dashboard UI changes — a stale screenshot is worse than none, since it advertises behaviour the plugin no longer has.
 
 ### Releasing
 

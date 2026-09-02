@@ -21,6 +21,8 @@ The output DLL goes to `Jellyfin.Plugin.AgeRating/bin/Debug/net9.0/Jellyfin.Plug
 
 A reproducible end-to-end dev environment (builds the DLL, generates mock media, and runs Jellyfin 10.11 with the plugin preinstalled) lives under `dev/` — run `./dev/run.sh` (or `./dev/run.sh --reset` for a clean wipe). Runtime state (Jellyfin config, mock media, built artifacts) lands in `.dev-env/`, gitignored.
 
+The scripts under `dev/` are tracked mode `100755`; if a checkout loses the executable bit (a CIFS/SMB working copy will), `./dev/run.sh` fails with "Permission denied" — `chmod +x dev/*.sh` rather than invoking them via `bash`.
+
 Two install modes, chosen via compose profiles in [dev/docker-compose.yml](dev/docker-compose.yml):
 
 - **`./dev/run.sh`** (default, `direct` profile) — a sidecar container drops the compiled DLL straight into `/config/plugins/<name>_<version>/` before Jellyfin starts. Fast loop for code changes.
@@ -62,6 +64,7 @@ Follow the patterns already established in the existing files rather than introd
 | `Jellyfin.Plugin.AgeRating/Api/LibraryChoiceDto.cs` | Response shape for `GET /AgeRating/Libraries` — id/name pair backing the main page's library filter. |
 | `Jellyfin.Plugin.AgeRating/Api/UnmappedRatingEntryDto.cs` | Response shape for `GET /AgeRating/UnmappedRatings` — unmapped source rating / count pair. |
 | `Jellyfin.Plugin.AgeRating/Api/GlobalCountsDto.cs` | Response shape for `GET /AgeRating/Counts` — server-wide unrated/pending counts for the Automation card. |
+| `dev/screenshot.mjs` | Playwright capture of both dashboard pages into `docs/screenshots/`. Navigates by the page **names registered in `Plugin.cs`** (`AgeRatings`, `Age Rating Converter`) — rename a page there and this silently times out. Expects an admin `root`/`test` and a scanned library. |
 | `build.yaml` | Plugin metadata for the build/packaging pipeline. Must stay in sync with `Plugin.cs`'s GUID, the assembly version, and `targetAbi`. |
 | `manifest.json` | Jellyfin plugin-repository manifest served over HTTP (see Releasing). |
 
