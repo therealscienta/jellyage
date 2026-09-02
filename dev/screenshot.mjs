@@ -39,7 +39,7 @@ async function navigateToPage(page, hash, readySelector, waitMs = 2000) {
     console.log('Capturing main page...');
     await navigateToPage(
         page,
-        '/configurationpage?name=Age%20Ratings%20Main',
+        '/configurationpage?name=AgeRatings',
         '#AgeRatingsMainPage',
         3000
     );
@@ -54,6 +54,21 @@ async function navigateToPage(page, hash, readySelector, waitMs = 2000) {
         '#AgeRatingConfigPage',
         2500
     );
+    // Unscrolled, the page's intro text pushes the mapping table entirely below the
+    // 900px fold and the shot ends at the column headers. Anchor on the Settings card
+    // instead: that frames target-system choice, the mapping actions and the unmapped
+    // worklist, with a few table rows to show it is editable. Anchoring on the mapping
+    // card instead scrolls too far — the frame then fills with near-identical rating
+    // rows and loses the settings context.
+    await page.evaluate(() => {
+        const card = document.querySelector('#AgeRatingConfigPage .arc-card');
+        if (card) {
+            // Sit the card just under Jellyfin's ~48px sticky bar. Any more headroom
+            // and the intro paragraph reappears sliced through the middle of a line.
+            window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 56 });
+        }
+    });
+    await page.waitForTimeout(800);
     await page.screenshot({ path: `${OUT}/config-page.png`, fullPage: false });
     console.log(`Saved ${OUT}/config-page.png`);
 
