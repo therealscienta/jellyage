@@ -1,7 +1,7 @@
 ---
 name: "Age Rating Converter"
 guid: "3b4a2e9f-7c1d-4e8b-a562-9f3d1c8e4a07"
-version: "1.1.0.0"
+version: "1.2.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Converts media age ratings between rating systems (MPAA, BBFC, FSK, and more) using a user-defined mapping table."
@@ -15,6 +15,13 @@ owner: "jellyfin"
 artifacts:
 - "Jellyfin.Plugin.AgeRating.dll"
 changelog: >
-  Rating filter dropdown, per-library NFO persistence status card, active-system banner,
-  clickable item titles, and bucket clamping so ratings like NC-17 map to the nearest
-  available target (e.g. Sweden's 15) instead of being silently skipped.
+  Behaviour change: automation now only fills in ratings that are empty and never
+  overwrites one you set yourself. The "Overwrite existing ratings" setting is gone,
+  replaced by an explicit, confirmed "Re-map all" action for re-applying the mapping
+  table after changing target system. Previously that setting, when on, silently
+  reverted hand-edited ratings on the next run.
+  Also: filter the item list by library; an "Unmapped in library" worklist on the
+  settings page that turns a rating with no mapping row into a pre-filled row in one
+  click, with a matching "No mapping match" filter chip; mapping rows sorted by target
+  rating and manually-added rows marked; and "Run Now" no longer does nothing when
+  "Run after library scan" is unchecked.
