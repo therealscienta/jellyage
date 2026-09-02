@@ -157,9 +157,10 @@ The plugin is distributed via a manifest URL that admins paste into Dashboard â†
 
 Releasing is tag-driven via [.github/workflows/release.yml](.github/workflows/release.yml):
 
-1. Bump the Assembly/FileVersion in the csproj if you changed it (tag will flow through as `/p:Version=...`).
-2. Update `version:` in [build.yaml](build.yaml).
-3. `git tag v1.0.0.0 && git push --tags` (four-segment version to match Jellyfin's `AssemblyVersion` convention).
+1. Bump the Assembly/FileVersion in the csproj if you changed it (tag will flow through as `/p:Version=...`). There is none today â€” `Directory.Build.props` pins `0.0.0.0` and the workflow overrides it from the tag.
+2. Update `version:` and `changelog:` in [build.yaml](build.yaml). The changelog becomes the plugin-catalogue entry, so lead with anything that changes the behaviour of an existing install rather than with new features.
+3. Update `version:` and `changelog:` in [dev/meta.json](dev/meta.json) to match. This one only affects the dev harness, but it is the file `install-plugin.sh` derives its install directory from, so leaving it stale makes the dev instance claim the wrong version.
+4. `git tag v1.0.0.0 && git push --tags` (four-segment version to match Jellyfin's `AssemblyVersion` convention).
 
 The Action then:
 - Builds the DLL in Release mode with the tag's version.
